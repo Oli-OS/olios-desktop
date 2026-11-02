@@ -1,0 +1,51 @@
+FROM docker.io/library/ubuntu:26.04 AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+    build-essential \
+    libcairo2-dev \
+    libwayland-dev \
+    pkg-config \
+    wayland-protocols \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY client.c background.c ./
+
+RUN mkdir -p /tmp/lucia-build /out \
+    && wayland-scanner client-header \
+    /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml \
+    /tmp/lucia-build/xdg-shell-client-protocol.h \
+    && wayland-scanner private-code \
+    /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml \
+    /tmp/lucia-build/xdg-shell-protocol.c \
+    && cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L \
+    -I/tmp/lucia-build client.c /tmp/lucia-build/xdg-shell-protocol.c \
+    -o /out/lucia-gui-prototype $(pkg-config --cflags --libs wayland-client cairo) \
+    && cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L \
+    -I/tmp/lucia-build background.c /tmp/lucia-build/xdg-shell-protocol.c \
+    -o /out/lucia-background-prototype $(pkg-config --cflags --libs wayland-client cairo)
+
+FROM docker.io/library/ubuntu:26.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+    fonts-dejavu-core \
+    libcairo2 \
+    libseat1 \
+    libwayland-client0 \
+    util-linux \
+    weston \
+    && rm -rf /var/lib/apt/lists/* \
+    && weston_help="$(weston --help 2>&1)" \
+    && printf '%s' "$weston_help" | grep -q -- '--shell' \
+    && find /usr/lib -type f -name kiosk-shell.so -print -quit | grep -q .
+
+COPY --from=build /out/lucia-gui-prototype /usr/local/bin/lucia-gui-prototype
+COPY --from=build /out/lucia-background-prototype /usr/local/bin/lucia-background-prototype
+
+RUN chmod 0555 /usr/local/bin/lucia-gui-prototype /usr/local/bin/lucia-background-prototype
