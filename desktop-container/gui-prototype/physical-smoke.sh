@@ -73,7 +73,7 @@ preflight() {
     printf '%s\n' 'Run this development-only test as a non-root user.' >&2
     return 1
   fi
-  for command_name in sudo ctr docker systemctl dpkg dpkg-query fgconsole chvt timeout stat awk grep tee; do
+  for command_name in sudo ctr docker cargo systemctl dpkg dpkg-query fgconsole chvt timeout stat awk grep tee; do
     require_command "$command_name" || return 1
   done
   if ! docker buildx version >/dev/null 2>&1 || ! docker buildx inspect >/dev/null 2>&1; then
@@ -145,7 +145,7 @@ if [[ "$stay_mode" -eq 1 ]]; then
 else
   printf '%s\n' 'DEVELOPMENT ONLY: this test takes over physical tty2 for up to 180 seconds.'
 fi
-printf '%s\n' 'It starts a DRM compositor and displays a LUCIA-owned background and taskbar, with no app content; save other console work first.'
+printf '%s\n' 'It starts a DRM compositor and displays the LUCIA-owned background, demo app pins, and local Qwen3 assistant. Prompts reach host-loopback Ollama only through a private Unix socket; the UI task has no host networking. No apps are launched. Save other console work first.'
 if [[ ! -t 0 ]]; then
   printf '%s\n' 'An interactive terminal is required for the confirmation and client.' >&2
   exit 1
@@ -172,10 +172,15 @@ work_dir=$(mktemp -d "${TMPDIR:-/tmp}/lucia-physical-smoke.XXXXXXXX")
 runtime_dir="$work_dir/runtime"
 weston_logs="$work_dir/weston-logs"
 client_log="$work_dir/client.log"
+provider_dir="$work_dir/provider"
+provider_socket="$provider_dir/model.sock"
+provider_log="$work_dir/provider.log"
 weston_config="$work_dir/weston.ini"
 namespace_created=0
 seatd_started=0
 vt_switched=0
+provider_pid=
+provider_started=0
 capability_drop_args=()
 capability_ceiling=$(</proc/sys/kernel/cap_last_cap)
 for ((capability_index = 0; capability_index <= capability_ceiling; capability_index++)); do
@@ -190,6 +195,7 @@ print_failure_logs() {
   local log_file
   for log_file in \
     "$work_dir/image-build.log" \
+    "$provider_log" \
     "$weston_logs/weston-startup.log" \
     "$weston_logs/weston.log" \
     "$client_log"; do
@@ -211,6 +217,12 @@ cleanup() {
   local snapshot_listing
   trap - EXIT INT TERM
   set +e
+
+  if [[ "$provider_started" -eq 1 ]]; then
+    kill "$provider_pid" >/dev/null 2>&1
+    wait "$provider_pid" >/dev/null 2>&1
+    provider_started=0
+  fi
 
   if [[ "$namespace_created" -eq 1 ]]; then
     for container_id in "$client_id" "$weston_id"; do
@@ -302,11 +314,19 @@ trap 'exit 143' TERM
 
 chmod 700 "$work_dir"
 sudo -n install -d -o "$uid_number" -g "$gid_number" -m 0700 "$runtime_dir"
+mkdir -m 0700 "$provider_dir"
 sudo -n install -d -o "$uid_number" -g "$gid_number" -m 0750 "$weston_logs"
 printf '[output]\nname=DP-1\ntransform=rotate-270\n' >"$weston_config"
 chmod 0444 "$weston_config"
 
 prototype_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+product_dir=$(cd -- "$prototype_dir/../../product" && pwd)
+broker_binary="$product_dir/target/release/lucia-local-model"
+if ! cargo build --manifest-path "$product_dir/Cargo.toml" --release \
+  -p lucia-local-model --bin lucia-local-model; then
+  printf '%s\n' 'Could not build the local model broker; physical display state is unchanged.' >&2
+  exit 1
+fi
 if ! docker buildx build \
   --platform linux/amd64 \
   --file "$prototype_dir/Containerfile" \
@@ -330,6 +350,33 @@ if ! containerd images list | awk -v image="$image" '$1 == image { found = 1 } E
   exit 1
 fi
 
+provider_dir_state=$(stat -c '%u:%g:%a' "$provider_dir")
+if [[ "$provider_dir_state" != "$uid_number:$gid_number:700" ]]; then
+  printf 'Unexpected model socket directory ownership/mode: %s\n' "$provider_dir_state" >&2
+  exit 1
+fi
+LUCIA_MODEL_SOCKET="$provider_socket" "$broker_binary" serve \
+  --socket "$provider_socket" --model qwen3:0.6b >"$provider_log" 2>&1 &
+provider_pid=$!
+provider_started=1
+provider_ready=0
+for attempt in {1..100}; do
+  if grep -Fq 'LOCAL_MODEL_READY:' "$provider_log" && [[ -S "$provider_socket" ]]; then
+    provider_ready=1
+    break
+  fi
+  if ! kill -0 "$provider_pid" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ "$provider_ready" -ne 1 ]]; then
+  cat "$provider_log" >&2 || true
+  printf '%s\n' 'The local model broker did not become ready; physical display state is unchanged.' >&2
+  exit 1
+fi
+cat "$provider_log"
+
 if [[ "$saved_seatd_active" == inactive ]]; then
   seatd_started=1
   sudo -n systemctl start seatd.service
@@ -345,6 +392,7 @@ fi
 seatd_socket_gid=$(sudo -n stat -c '%g' "$seatd_socket")
 
 runtime_mount="type=bind,src=$runtime_dir,dst=/run/lucia,options=rbind:rw"
+provider_mount="type=bind,src=$provider_dir,dst=/run/lucia-model,options=rbind:ro"
 weston_config_mount="type=bind,src=$weston_config,dst=/run/lucia/weston.ini,options=rbind:ro"
 seatd_mount="type=bind,src=$seatd_socket,dst=$seatd_socket,options=rbind:rw"
 udev_mount='type=bind,src=/run/udev,dst=/run/udev,options=rbind:ro'
@@ -407,7 +455,7 @@ if [[ "$socket_ready" -ne 1 ]]; then
   exit 1
 fi
 
-printf '%s\n' 'Weston kiosk shell is on tty2; LUCIA will present the fullscreen background and taskbar with no app content.'
+printf '%s\n' 'Weston kiosk shell is on tty2; LUCIA will present its fullscreen background, demo pins, and clickable local Qwen3 assistant.'
 printf 'WAYLAND_SOCKET_READY: %s\n' "$runtime_dir/$wayland_display"
 grep -F 'WESTON_KIOSK_SHELL_AVAILABLE:' "$weston_logs/weston-startup.log"
 if [[ "$stay_mode" -eq 1 ]]; then
@@ -421,10 +469,12 @@ client_command=(sudo -n ctr -n "$namespace" run --rm \
   --user "$uid_number:$gid_number" \
   "${capability_drop_args[@]}" \
   --mount "$runtime_mount" \
+  --mount "$provider_mount" \
   --env "LUCIA_UID=$uid_number" \
   --env HOME=/tmp \
   --env XDG_RUNTIME_DIR=/run/lucia \
   --env "WAYLAND_DISPLAY=$wayland_display" \
+  --env LUCIA_MODEL_SOCKET=/run/lucia-model/model.sock \
   "$image" "$client_id" bash -ec '
     [[ "$(id -u)" == "$LUCIA_UID" ]] || { printf "%s\n" "Client is not running as the invoking UID" >&2; exit 1; }
     while read -r cap_field cap_value extra_field; do
@@ -465,7 +515,8 @@ grep -Fq 'LUCIA_BACKGROUND_FULLSCREEN_CONFIGURED:' "$client_log" || { printf '%s
 grep -Fq 'LUCIA_BACKGROUND_FRAME_PRESENTED' "$client_log" || { printf '%s\n' 'Presented background frame marker missing.' >&2; exit 1; }
 grep -Fq 'LUCIA_OUTPUT_TRANSFORM: transform=rotate-270' "$client_log" || { printf '%s\n' 'Clockwise Weston output transform marker missing.' >&2; exit 1; }
 grep -Fq 'LUCIA_POINTER_CURSOR_SET: width=32 height=44 hotspot=2,2' "$client_log" || { printf '%s\n' 'LUCIA pointer cursor marker missing.' >&2; exit 1; }
-grep -Fq 'LUCIA_SHELL_ELEMENTS: identity=LUCIA workspace=1 apps=none status=none' "$client_log" || { printf '%s\n' 'LUCIA shell element marker missing.' >&2; exit 1; }
+grep -Fq 'LUCIA_DEMO_PINS: count=3 launch=disabled' "$client_log" || { printf '%s\n' 'LUCIA demo-pin marker missing.' >&2; exit 1; }
+grep -Fq 'LUCIA_SHELL_ELEMENTS: identity=LUCIA menu=center apps=demo-pinned conversation=closed status=none' "$client_log" || { printf '%s\n' 'LUCIA shell element marker missing.' >&2; exit 1; }
 if [[ ! "$client_log" =~ LUCIA_BACKGROUND_FULLSCREEN_CONFIGURED:\ ([0-9]+)x([0-9]+) ]]; then
   printf '%s\n' 'Configured output dimensions are missing or invalid.' >&2
   exit 1

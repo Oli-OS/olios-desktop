@@ -119,7 +119,7 @@ fetch_packages() {
 }
 
 fetch_packages fetch-weston "$weston_packages" weston passwd util-linux
-fetch_packages fetch-client "$client_packages" build-essential libcairo2-dev libwayland-dev wayland-protocols pkg-config passwd util-linux fonts-dejavu-core
+fetch_packages fetch-client "$client_packages" build-essential libcairo2-dev libwayland-dev libxkbcommon-dev wayland-protocols pkg-config passwd util-linux fonts-dejavu-core
 
 sudo -n ctr -n "$namespace" run --detach \
   --mount "$socket_mount" \
@@ -156,7 +156,7 @@ if ! client_output=$(sudo -n ctr -n "$namespace" run --rm \
   "$image" "$client_id" bash -ec '
     cp -a /mnt/lists/. /var/lib/apt/lists/
     cp /mnt/debs/*.deb /var/cache/apt/archives/
-    DEBIAN_FRONTEND=noninteractive apt-get --no-download install -y --no-install-recommends build-essential libcairo2-dev libwayland-dev wayland-protocols pkg-config passwd util-linux fonts-dejavu-core > /var/log/lucia/install.log 2>&1 || { tail -40 /var/log/lucia/install.log; exit 1; }
+    DEBIAN_FRONTEND=noninteractive apt-get --no-download install -y --no-install-recommends build-essential libcairo2-dev libwayland-dev libxkbcommon-dev wayland-protocols pkg-config passwd util-linux fonts-dejavu-core > /var/log/lucia/install.log 2>&1 || { tail -40 /var/log/lucia/install.log; exit 1; }
     getent group "$LUCIA_GID" >/dev/null || groupadd --gid "$LUCIA_GID" lucia
     getent passwd "$LUCIA_UID" >/dev/null || useradd --uid "$LUCIA_UID" --gid "$LUCIA_GID" --home-dir "$HOME" --no-create-home --shell /usr/sbin/nologin lucia
     install -d -o "$LUCIA_UID" -g "$LUCIA_GID" "$HOME"
@@ -164,9 +164,9 @@ if ! client_output=$(sudo -n ctr -n "$namespace" run --rm \
     wayland-scanner client-header /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml /tmp/lucia-build/xdg-shell-client-protocol.h
     wayland-scanner private-code /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml /tmp/lucia-build/xdg-shell-protocol.c
     cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -I/tmp/lucia-build /opt/lucia/client.c /tmp/lucia-build/xdg-shell-protocol.c -o /tmp/lucia-build/lucia-gui-prototype $(pkg-config --cflags --libs wayland-client cairo)
-    cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -I/tmp/lucia-build /opt/lucia/background.c /tmp/lucia-build/xdg-shell-protocol.c -o /tmp/lucia-build/lucia-background-prototype $(pkg-config --cflags --libs wayland-client cairo)
+    cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -I/tmp/lucia-build /opt/lucia/background.c /tmp/lucia-build/xdg-shell-protocol.c -o /tmp/lucia-build/lucia-background-prototype $(pkg-config --cflags --libs wayland-client cairo xkbcommon)
     chown -R "$LUCIA_UID:$LUCIA_GID" /tmp/lucia-build
-    dpkg-query --show build-essential libcairo2-dev libwayland-dev wayland-protocols fonts-dejavu-core > /var/log/lucia/packages.txt
+    dpkg-query --show build-essential libcairo2-dev libwayland-dev libxkbcommon-dev wayland-protocols fonts-dejavu-core > /var/log/lucia/packages.txt
     python3 -c "import os, time; p = \"/run/lucia/wayland-lucia\"; end = time.monotonic() + 20; exec(\"while time.monotonic() < end:\\n if os.path.exists(p): break\\n time.sleep(0.05)\"); raise SystemExit(0 if os.path.exists(p) else \"Wayland socket did not appear\")"
     setpriv --reuid="$LUCIA_UID" --regid="$LUCIA_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- /tmp/lucia-build/lucia-gui-prototype --smoke
     exec setpriv --reuid="$LUCIA_UID" --regid="$LUCIA_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- /tmp/lucia-build/lucia-background-prototype --smoke
@@ -194,7 +194,11 @@ for marker in \
   'LUCIA_BACKGROUND_FULLSCREEN_CONFIGURED: 768x1024' \
   'LUCIA_OUTPUT_TRANSFORM: transform=rotate-270' \
   LUCIA_BACKGROUND_FRAME_PRESENTED \
-  'LUCIA_SHELL_ELEMENTS: identity=LUCIA workspace=1 apps=none status=none' \
+  LUCIA_DEMO_PINS: \
+  'LUCIA_SHELL_ELEMENTS: identity=LUCIA menu=center apps=demo-pinned conversation=open status=none' \
+  'LUCIA_ASSISTANT_PANEL: state=open' \
+  LUCIA_ASSISTANT_PROMPT: \
+  LUCIA_MENU_LAYOUT: \
   'LIFECYCLE: startup' \
   'LIFECYCLE: running' \
   'LIFECYCLE: shutdown'; do
@@ -205,6 +209,14 @@ for marker in \
 done
 if ! grep -Eq '^LUCIA_TASKBAR_LAYOUT: edge=bottom x=0 y=[0-9]+ width=768 height=[0-9]+$' <<<"$client_output"; then
   printf '%s\n' 'Missing responsive bottom taskbar layout marker for the configured output.' >&2
+  exit 1
+fi
+if ! grep -Eq '^LUCIA_ASSISTANT_PANEL: state=open x=[0-9]+ y=[0-9]+ width=[0-9]+ height=[0-9]+$' <<<"$client_output"; then
+  printf '%s\n' 'Missing opened assistant panel layout marker for the configured output.' >&2
+  exit 1
+fi
+if ! grep -Eq '^LUCIA_ASSISTANT_PROMPT: x=[0-9]+ y=[0-9]+ width=[0-9]+ height=[0-9]+$' <<<"$client_output"; then
+  printf '%s\n' 'Missing assistant prompt layout marker.' >&2
   exit 1
 fi
 
