@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+config=/etc/oli-desktop/display.conf
+output=
+transform=
+
+while IFS= read -r line || [ -n "$line" ]; do
+    current_line=$line
+    line=
+    case "$current_line" in
+        ''|'#'*) continue ;;
+        *=*) key=${current_line%%=*}; value=${current_line#*=} ;;
+        *) printf '%s\n' 'Invalid display setting' >&2; exit 1 ;;
+    esac
+    case "$key" in
+        output) output=$value ;;
+        transform) transform=$value ;;
+        *) printf 'Unsupported display setting: %s\n' "$key" >&2; exit 1 ;;
+    esac
+done < "$config"
+
+case "$output" in
+    ''|*[!A-Za-z0-9._-]*) printf '%s\n' 'Invalid output name in display config' >&2; exit 1 ;;
+esac
+
+case "$transform" in
+    normal|90|180|270|flipped|flipped-90|flipped-180|flipped-270) ;;
+    *) printf '%s\n' 'Invalid output transform in display config' >&2; exit 1 ;;
+esac
+
+wlr-randr --output "$output" --transform "$transform"
+export OLI_GREETER_STYLE=/etc/oli-desktop/greeter.css
+export OLI_GREETER_AVATAR=/usr/local/share/oli-desktop/avatar.svg
+exec /usr/local/libexec/oli-login

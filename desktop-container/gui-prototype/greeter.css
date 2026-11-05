@@ -1,53 +1,70 @@
-window {
-    background-color: #10191c;
-    color: #edf4f1;
+window#login-window,
+#login-root {
+    background-color: #dce7e5;
+    color: #203336;
     font-family: "DejaVu Sans", sans-serif;
 }
 
-window #window {
-    background-color: #1b292a;
-    border: 1px solid #3e5651;
-    border-radius: 10px;
-    padding: 32px;
+#login-content {
+    padding: 36px;
 }
 
-window label {
-    color: #dce8e3;
-    font-size: 15px;
+#profile-avatar {
+    margin-bottom: 8px;
 }
 
-window #input-field,
-window #command-selector,
-window #command-selector entry {
-    background-color: #111b1c;
-    color: #f1f7f4;
-    border: 1px solid #58736a;
-    border-radius: 7px;
-    min-height: 42px;
-    padding: 0 12px;
+#profile-name {
+    color: #203336;
+    font-size: 26px;
+    font-weight: 500;
 }
 
-window #input-field:focus,
-window #command-selector:focus,
-window #command-selector entry:focus {
-    border-color: #8bd8b2;
+#profile-selector,
+#auth-prompt {
+    color: #526669;
+    font-size: 14px;
 }
 
-window button {
-    background-color: #b9e5cd;
-    color: #14251d;
+#password-row {
+    background-color: rgba(255, 255, 255, 0.78);
+    border: 1px solid #b9c9c7;
+    border-radius: 5px;
+}
+
+#password-row:focus-within {
+    border-color: #397b6c;
+}
+
+#password-entry {
+    background: transparent;
     border: none;
-    border-radius: 6px;
-    min-height: 40px;
-    padding: 0 20px;
-    font-weight: bold;
+    box-shadow: none;
+    color: #203336;
+    font-size: 15px;
+    min-height: 46px;
+    padding: 0 14px;
 }
 
-window button:hover,
-window button:focus {
-    background-color: #d0f0df;
+#password-entry:focus {
+    box-shadow: none;
 }
 
-window button:active {
-    background-color: #9dcbb3;
+#submit-button {
+    background-color: #315f5b;
+    border: none;
+    border-radius: 4px;
+    color: #ffffff;
+    margin: 4px;
+    min-height: 38px;
+    min-width: 40px;
+}
+
+#submit-button:hover,
+#submit-button:focus {
+    background-color: #244b48;
+}
+
+#status-label {
+    color: #a53d3d;
+    font-size: 13px;
 }

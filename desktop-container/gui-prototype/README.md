@@ -27,43 +27,59 @@ applications.
 
 ## Graphical Login
 
-The host login screen uses Ubuntu's `gtkgreet` inside the single-app Wayland
-compositor `cage`, started by `greetd` on tty2. The greeter runs as `_greetd`
-and connects to seatd through a per-user ACL on `/run/seatd.sock`; it is not
-added to the `video` group. The greetd service cgroup denies device access by
-default and allows only tty2 for greeter control; cage obtains active-seat
-devices through seatd. Cage is started with VT switching enabled so another
-TTY remains available for recovery. After successful authentication, gtkgreet launches the existing
-`/usr/local/libexec/oli-desktop-session` command.
+The host login screen uses the local GTK3 greeter inside the single-app Wayland
+compositor `cage`, started by `greetd` on tty2. The greeter lists eligible human
+accounts, shows a bundled neutral avatar, and passes PAM prompts through
+greetd's documented IPC. After successful authentication it starts only the
+existing `/usr/local/libexec/oli-desktop-session` command. No layer-shell mode
+is used. The greeter runs as `_greetd` and connects to seatd through a per-user
+ACL on `/run/seatd.sock`; it is not added to the `video` group. The greetd
+service cgroup denies device access by default and allows tty2 plus only
+`/dev/dri/card1` and `/dev/dri/renderD128`. On start, greetd grants `_greetd`
+read/write ACLs on those two nodes; the ACLs are removed when the service stops.
+Cage obtains active-seat devices through seatd and is started with VT switching
+enabled so another TTY remains available for recovery.
 
-The image includes a generic Weston config with no output-specific settings, so
-Weston detects available outputs and applies no configured transform by
-default. A host may optionally provide `/etc/oli-desktop/weston.ini`; the
-session launcher mounts that file read-only for Weston. Keep connector names
-and per-device transforms in this host-only file, not in the repository or
-image. Changes take effect at the next Oli Desktop login.
+The host provides `/etc/oli-desktop/display.conf` with `output` and `transform`
+settings for the login screen. The greeter helper applies them with
+`wlr-randr` before starting `gtkgreet`. Keep connector names and transforms in
+this host-only file; this machine uses `output=DP-1` and `transform=270`, which
+matches its post-login Weston configuration. A host may also provide
+`/etc/oli-desktop/weston.ini`; the session launcher mounts that file read-only
+for Weston, and changes take effect at the next Oli Desktop login.
 
 The desktop taskbar provides a `Log out` action. It opens a confirmation dialog;
 confirming exits the foreground desktop client with a dedicated status, after
 which the session launcher removes the Weston task and returns to gtkgreet.
 Cancel or Escape keeps the authenticated session running.
 
-Install the Ubuntu packages `cage`, `gtkgreet`, and `acl`, then install the
-checked-in host configuration and reload the services:
+Install the runtime packages `cage`, `wlr-randr`, and `acl`, plus the GTK3 and
+json-c development packages used to build the greeter. Build and exercise the
+greetd IPC client before installing it:
 
 ```sh
-sudo install -D -m 0644 desktop-container/gui-prototype/greetd-config.toml /etc/greetd/config.toml
+sudo apt install cage wlr-randr acl libgtk-3-dev libjson-c-dev pkg-config
+cc -std=c11 -Wall -Wextra -Werror \
+	$(pkg-config --cflags gtk+-3.0 json-c) \
+	desktop-container/gui-prototype/oli-login.c \
+	-o /tmp/oli-login \
+	$(pkg-config --libs gtk+-3.0 json-c)
+/tmp/oli-login --self-test
+
+backup_dir=$(sudo mktemp -d /var/backups/oli-greeter.XXXXXXXX)
+sudo cp -a /etc/oli-desktop/greeter.css "$backup_dir/greeter.css"
+sudo cp -a /usr/local/libexec/oli-greeter "$backup_dir/oli-greeter"
+sudo install -D -m 0755 /tmp/oli-login /usr/local/libexec/oli-login
+sudo install -D -m 0644 desktop-container/gui-prototype/avatar.svg /usr/local/share/oli-desktop/avatar.svg
 sudo install -D -m 0644 desktop-container/gui-prototype/greeter.css /etc/oli-desktop/greeter.css
-sudo install -D -m 0644 desktop-container/gui-prototype/systemd/seatd.service.d/10-greetd-acl.conf /etc/systemd/system/seatd.service.d/10-greetd-acl.conf
-sudo install -D -m 0644 desktop-container/gui-prototype/systemd/greetd.service.d/10-seatd.conf /etc/systemd/system/greetd.service.d/10-seatd.conf
-sudo systemctl daemon-reload
-sudo systemctl enable --now getty@tty3.service
-sudo systemctl restart seatd.service greetd.service
+sudo install -D -m 0755 desktop-container/gui-prototype/oli-greeter /usr/local/libexec/oli-greeter
+sudo systemctl restart greetd.service
 ```
 
-The seatd ACL is applied each time its socket is created. The greetd unit is
-ordered after seatd so the ACL is in place before cage starts. No auto-login,
-host D-Bus access, or app access to seat devices is configured.
+The `oli-greeter` helper applies the host-only output transform before launching
+the GTK app. Keep the existing greetd command, seatd ACL, and closed DRM device
+policy in place. No auto-login, host D-Bus access, or app access to seat devices
+is configured.
 
 ## Headless Regression Coverage
 
