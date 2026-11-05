@@ -1,26 +1,69 @@
-# LUCIA GUI Prototype
+# Oli Desktop GUI Prototype
 
-**Status: provisional desktop interaction prototype, not a framework or
-selected product stack.** The physical presentation is one LUCIA-owned
-fullscreen Wayland surface with a subdued background and bottom taskbar. The
-taskbar has a centered LUCIA menu button and illustrative demo pins; pins do not
-launch applications. Clicking LUCIA opens a conversation panel where keyboard
-text entry, Backspace, Enter, and Escape are supported. The physical runner
-sends prompts to the installed local Qwen3 model through Ollama using a private
-Unix-domain socket broker; the UI container has no host networking. The
-headless layout check does not send prompts to a model. No MCP integration is
-present. The layout uses
+**Status: provisional Oli Desktop interaction prototype, not a finished
+desktop, framework, or selected product stack.** The physical presentation is
+one fullscreen Wayland surface with a responsive workspace home screen and
+bottom taskbar. The home screen has a clear workspace heading and an `Open Oli`
+action; the taskbar has a centered Oli menu button and illustrative demo pins.
+Pins do not launch applications. Either Oli entry point opens a conversation
+panel where keyboard text entry,
+Backspace, Enter, and Escape are supported. Oli is the LLM agent; this local
+Qwen3/Ollama flow is only an assistant and broker prototype, not a complete
+agent runtime. The physical runner sends prompts through a private Unix-domain
+socket broker; the UI container has no host networking. The headless layout
+check does not send prompts to a model. No MCP integration is present. The layout uses
 the compositor-configured output dimensions. Weston is a
 temporary presentation fixture in kiosk-shell mode; its desktop panel is not
-presented as LUCIA. The physical test rotates only the Weston `DP-1` session
-clockwise and leaves host framebuffer/GRUB rotation untouched. Neither Weston
-nor Wayland is selected as LUCIA's long-term compositor or display protocol.
+presented as part of the Oli Desktop UI. Output detection and orientation use
+Weston's neutral default unless the host supplies a private output-specific
+configuration. Neither Weston nor Wayland is selected as Oli Desktop's
+long-term compositor or display protocol.
 
 The separate Cairo window client is retained only for the existing headless
 regression check below. It is not part of the physical presentation or the
 first visible milestone. This prototype does not modify or replace the
 experimental GTK launcher in `desktop-container/launcher/` and does not launch
 applications.
+
+## Graphical Login
+
+The host login screen uses Ubuntu's `gtkgreet` inside the single-app Wayland
+compositor `cage`, started by `greetd` on tty2. The greeter runs as `_greetd`
+and connects to seatd through a per-user ACL on `/run/seatd.sock`; it is not
+added to the `video` group. The greetd service cgroup denies device access by
+default and allows only tty2 for greeter control; cage obtains active-seat
+devices through seatd. Cage is started with VT switching enabled so another
+TTY remains available for recovery. After successful authentication, gtkgreet launches the existing
+`/usr/local/libexec/oli-desktop-session` command.
+
+The image includes a generic Weston config with no output-specific settings, so
+Weston detects available outputs and applies no configured transform by
+default. A host may optionally provide `/etc/oli-desktop/weston.ini`; the
+session launcher mounts that file read-only for Weston. Keep connector names
+and per-device transforms in this host-only file, not in the repository or
+image. Changes take effect at the next Oli Desktop login.
+
+The desktop taskbar provides a `Log out` action. It opens a confirmation dialog;
+confirming exits the foreground desktop client with a dedicated status, after
+which the session launcher removes the Weston task and returns to gtkgreet.
+Cancel or Escape keeps the authenticated session running.
+
+Install the Ubuntu packages `cage`, `gtkgreet`, and `acl`, then install the
+checked-in host configuration and reload the services:
+
+```sh
+sudo install -D -m 0644 desktop-container/gui-prototype/greetd-config.toml /etc/greetd/config.toml
+sudo install -D -m 0644 desktop-container/gui-prototype/greeter.css /etc/oli-desktop/greeter.css
+sudo install -D -m 0644 desktop-container/gui-prototype/systemd/seatd.service.d/10-greetd-acl.conf /etc/systemd/system/seatd.service.d/10-greetd-acl.conf
+sudo install -D -m 0644 desktop-container/gui-prototype/systemd/greetd.service.d/10-seatd.conf /etc/systemd/system/greetd.service.d/10-seatd.conf
+sudo systemctl daemon-reload
+sudo systemctl enable --now getty@tty3.service
+sudo systemctl restart seatd.service greetd.service
+```
+
+The seatd ACL is applied each time its socket is created. The greetd unit is
+ordered after seatd so the ACL is in place before cage starts. No auto-login,
+host D-Bus access, or app access to seat devices is configured.
 
 ## Headless Regression Coverage
 
@@ -35,6 +78,7 @@ evidence for the physical desktop layout or a selected framework design.
 | Pointer and keyboard activation | `wl_pointer` press/release and `wl_keyboard` Tab/Enter/Space handlers share the activation path | Weston headless advertises no `wl_seat`; smoke invokes the same event handlers in-process and does not inject compositor input or prove physical input |
 | Predictable focus and visible focus | Tab focuses the sole button; keyboard focus is rendered as a high-contrast outline | Only one focusable control; no focus traversal between multiple controls |
 | Status update | Both activation paths update the displayed status and report a marker | No application-launch behavior |
+| Session logout | Taskbar `Log out` opens a confirmation; cancel keeps the session active, and confirm exits through the session launcher | Requires the installed greetd/gtkgreet session configuration; physical return to the greeter is not exercised by the headless check |
 | Accessible label, role, and name | Client model records and reports metadata for the status label and button | Core Wayland has no accessibility semantic channel; metadata is not exposed to assistive technology |
 | Scaling-friendly dimensions | Window geometry and drawing use 480 by 320 logical units with buffer scale 2 | Headless test uses one output; fractional and dynamic output scaling are not tested |
 | Lifecycle and errors | Startup, running after the first presented frame, and shutdown are reported; Wayland/build setup errors are written to stderr | Recovery policy and structured error API are open |
@@ -61,8 +105,10 @@ reference, and test files are cleaned up on exit.
 This verifies the separate window regression, then compiles and runs the
 background renderer against a 1024 by 768 headless output transformed
 clockwise to 768 by 1024. It checks the reported output transform, fullscreen
-configure, taskbar/menu/pin bounds and markers, an opened assistant panel and
-prompt bounds, and a presented frame. The headless backend advertises no pointer
+configure, taskbar/menu/pin bounds and markers, workspace home and assistant
+action bounds, logout control and confirmation bounds, cancellation, keyboard
+confirmation, the logout exit status, an opened assistant panel and prompt
+bounds, and a presented frame. The headless backend advertises no pointer
 or keyboard seat, so this does not validate physical input. The separate window
 path exercises its own keyboard and pointer event-handler paths with
 deterministic in-process events. This is not a
@@ -73,7 +119,7 @@ the final product choice.
 ## Physical Display Check
 
 **Development only:** this test takes over physical `tty2` for up to 180 seconds
-to display the LUCIA-owned background, demo pins, and local Qwen3 assistant. It requires a non-root user with
+to display the Oli Desktop-owned background, demo pins, and local Qwen3 assistant. It requires a non-root user with
 non-interactive `sudo`, `containerd`, Docker Buildx with a usable builder, and the
 host `seatd` and `libseat1` packages already installed. It never installs host
 packages. The read-only preflight checks the builder and host prerequisites but
@@ -86,13 +132,13 @@ and the client runtime libraries. To build a local image for inspection:
 ```sh
 docker buildx build --platform linux/amd64 \
 	--file desktop-container/gui-prototype/Containerfile \
-	--tag localhost/lucia/gui-prototype:local \
+	--tag localhost/olios/oli-desktop:local \
 	desktop-container/gui-prototype
 ```
 
 For a physical run, the runner builds one uniquely tagged OCI image with Buildx,
 exports it as an OCI archive, and imports it into that run's temporary
-containerd namespace before taking over the display. Weston and the LUCIA
+containerd namespace before taking over the display. Weston and the Oli
 background client run as separate tasks from that same image; runtime tasks do
 not install packages, compile code, or bind-mount the source directory. The
 image remains unchanged for both tasks and is removed with the temporary
@@ -100,8 +146,8 @@ namespace during cleanup.
 
 Run the read-only preflight, then launch the interactive test:
 
-By default, the Weston compositor watchdog is 180 seconds and the LUCIA display
-client is capped at 60 seconds. To keep the physical presentation running until
+By default, the Weston compositor watchdog is 180 seconds and the Oli Desktop
+display client is capped at 60 seconds. To keep the physical presentation running until
 you stop it, use stay mode instead:
 
 ```sh
@@ -110,15 +156,15 @@ bash desktop-container/gui-prototype/physical-smoke.sh
 bash desktop-container/gui-prototype/physical-smoke.sh --stay
 ```
 
-Stay mode bypasses both timeout wrappers. The compositor and fullscreen LUCIA
-desktop remain active until you press Ctrl+C in the terminal running the
-script. Click the centered LUCIA button to open the conversation panel, type a
+Stay mode bypasses both timeout wrappers. The compositor and fullscreen Oli
+Desktop remain active until you press Ctrl+C in the terminal running the
+script. Click the centered Oli button to open the conversation panel, type a
 message, and press Enter or Send to query the real `qwen3:0.6b` model. Escape or
 Cancel stops an in-flight request; Clear removes the conversation. The three
 demo pins are illustrative and do not launch apps. The client log is captured
 and streamed to that terminal while it runs. When the
-pointer enters the fullscreen surface, LUCIA installs its high-contrast 32 by
-44 pixel cursor with `wl_pointer.set_cursor`; normal pointer motion remains
+pointer enters the fullscreen surface, the Oli Desktop client installs its
+high-contrast 32 by 44 pixel cursor with `wl_pointer.set_cursor`; normal pointer motion remains
 compositor-managed. Ctrl+C triggers cleanup, restoring the
 saved VT and seatd active/enabled state, then removing this run's containerd
 namespace and temporary work directory. Host fbcon and GRUB rotation settings
@@ -131,11 +177,10 @@ the invoking user, verifies the installed model through the host's loopback-only
 Ollama listener, and verifies the built image's Weston runtime advertises
 `--shell` and contains `kiosk-shell.so`, temporarily starts
 `seatd` only when it was inactive, and restores the original active VT and
-seatd active/enabled states on exit. Weston receives a read-only, per-run
-configuration file with `name=DP-1` and `transform=rotate-270`; Wayland defines
-that transform as 270 degrees counter-clockwise, or 90 degrees clockwise. The
-compositor rotates only this session. Weston runs with the kiosk shell,
-so its desktop panel is not part of the presentation.
+seatd active/enabled states on exit. Weston uses the image's generic config and
+autodetects available outputs; the smoke check accepts the detected output
+dimensions and does not require a particular orientation. Weston runs with the
+kiosk shell, so its desktop panel is not part of the presentation.
 Weston receives only tty2, the seatd socket, and read-only `/run/udev` and `/sys`
 mounts. The client runs as the invoking non-root UID with all capabilities
 dropped, shares the private Wayland runtime directory and a separate read-only
@@ -146,15 +191,15 @@ mode, GRUB changes, reboot, or host package changes are used.
 
 The separate [`background.c`](background.c) client requests a fullscreen
 xdg-shell surface, sizes its Cairo buffer from the compositor configure, and
-draws the LUCIA-owned background, centered menu, illustrative pins, and
-conversation panel. It handles Wayland pointer and keyboard capabilities when
+draws the Oli Desktop-owned workspace home screen, `Open Oli` action, centered
+menu, illustrative pins, and conversation panel. It handles Wayland pointer and keyboard capabilities when
 available; xkbcommon decodes text for the prompt. Prompt traffic uses bounded
 length frames over the private local-model socket, and generated text or
 provider errors are rendered in the panel. The assistant panel is closed at
 physical startup. It records transform, cursor, fullscreen, taskbar/menu/pin, assistant-layout, and
 presented-frame markers; the client task exit status and log are captured
 before cleanup removes the temporary work directory. Pins contain no launched
-app windows or app-provided pixels. This is a LUCIA-owned shell-rendering
+app windows or app-provided pixels. This is an Oli Desktop-owned shell-rendering
 prototype, not a framework or compositor implementation.
 
 The test removes its temporary namespace, image reference, tasks, and files. It

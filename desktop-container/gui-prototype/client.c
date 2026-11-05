@@ -230,7 +230,7 @@ static void render_buffer(struct app *app, struct frame_buffer *frame)
     cairo_set_source_rgb(context, 0.96, 0.96, 0.93);
     cairo_paint(context);
 
-    draw_text(context, 32, 54, 24, "LUCIA GUI Prototype", 0.12, 0.16, 0.17);
+    draw_text(context, 32, 54, 24, "Oli GUI Prototype", 0.12, 0.16, 0.17);
     draw_text(context, 32, 112, 14, "Status", 0.28, 0.34, 0.34);
     draw_text(context, 32, 140, 18, app->status, 0.12, 0.16, 0.17);
 
@@ -283,7 +283,7 @@ static int create_buffers(struct app *app)
     const size_t stride = (size_t)BUFFER_WIDTH * 4;
     const size_t buffer_size = stride * BUFFER_HEIGHT;
     struct wl_shm_pool *pool;
-    int fd = memfd_create("lucia-gui-prototype", MFD_CLOEXEC);
+    int fd = memfd_create("oli-desktop-gui-prototype", MFD_CLOEXEC);
     size_t index;
 
     if (fd < 0 || ftruncate(fd, (off_t)(buffer_size * BUFFER_COUNT)) < 0) {
@@ -715,8 +715,8 @@ int main(int argc, char **argv)
     xdg_surface_add_listener(app.xdg_surface, &xdg_surface_listener, &app);
     app.toplevel = xdg_surface_get_toplevel(app.xdg_surface);
     xdg_toplevel_add_listener(app.toplevel, &toplevel_listener, &app);
-    xdg_toplevel_set_title(app.toplevel, "LUCIA GUI Prototype");
-    xdg_toplevel_set_app_id(app.toplevel, "org.lucia.gui-prototype");
+    xdg_toplevel_set_title(app.toplevel, "Oli GUI Prototype");
+    xdg_toplevel_set_app_id(app.toplevel, "org.oli-desktop.gui-prototype");
     xdg_toplevel_set_min_size(app.toplevel, LOGICAL_WIDTH, LOGICAL_HEIGHT);
     xdg_toplevel_set_max_size(app.toplevel, LOGICAL_WIDTH, LOGICAL_HEIGHT);
     xdg_surface_set_window_geometry(app.xdg_surface, 0, 0, LOGICAL_WIDTH,

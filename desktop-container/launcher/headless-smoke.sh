@@ -14,7 +14,7 @@ fi
 sudo -n true
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-work_dir=$(mktemp -d "${TMPDIR:-/tmp}/lucia-launcher-headless.XXXXXXXX")
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/oli-desktop-launcher-headless.XXXXXXXX")
 runtime_dir="$work_dir/runtime"
 weston_logs="$work_dir/weston"
 client_logs="$work_dir/client"
@@ -27,7 +27,7 @@ if [[ "$runtime_owner" != "$uid_number:$gid_number:700" ]]; then
   printf 'Unexpected private runtime directory ownership/mode: %s\n' "$runtime_owner" >&2
   exit 1
 fi
-namespace="lucia-launcher-${uid_number}-$(date +%s)-$$"
+namespace="oli-desktop-launcher-${uid_number}-$(date +%s)-$$"
 image="docker.io/library/ubuntu:26.04"
 weston_id=weston
 client_id=client
@@ -61,7 +61,7 @@ cleanup() {
     done
   fi
 
-  if [[ -d "$work_dir" && "$work_dir" == "${TMPDIR:-/tmp}"/lucia-launcher-headless.* ]]; then
+  if [[ -d "$work_dir" && "$work_dir" == "${TMPDIR:-/tmp}"/oli-desktop-launcher-headless.* ]]; then
     sudo -n rm -rf -- "$work_dir"
   fi
   if [[ "$namespace_created" -eq 1 ]]; then
@@ -79,9 +79,9 @@ if ! ctr images pull --platform linux/amd64 "$image" >"$work_dir/image-pull.log"
   exit 1
 fi
 
-socket_mount="type=bind,src=$runtime_dir,dst=/run/lucia,options=rbind:rw"
-weston_log_mount="type=bind,src=$weston_logs,dst=/var/log/lucia,options=rbind:rw"
-client_log_mount="type=bind,src=$client_logs,dst=/var/log/lucia,options=rbind:rw"
+socket_mount="type=bind,src=$runtime_dir,dst=/run/oli-desktop,options=rbind:rw"
+weston_log_mount="type=bind,src=$weston_logs,dst=/var/log/oli-desktop,options=rbind:rw"
+client_log_mount="type=bind,src=$client_logs,dst=/var/log/oli-desktop,options=rbind:rw"
 weston_package_mount="type=bind,src=$weston_packages,dst=/mnt,options=rbind:ro"
 client_package_mount="type=bind,src=$client_packages,dst=/mnt,options=rbind:ro"
 
@@ -110,20 +110,20 @@ ctr run --detach \
   --mount "$socket_mount" \
   --mount "$weston_log_mount" \
   --mount "$weston_package_mount" \
-  --env "LUCIA_UID=$uid_number" \
-  --env "LUCIA_GID=$gid_number" \
-  --env "HOME=/tmp/lucia-home-$uid_number" \
-  --env XDG_RUNTIME_DIR=/run/lucia \
-  --env WAYLAND_DISPLAY=wayland-lucia \
+  --env "OLI_DESKTOP_UID=$uid_number" \
+  --env "OLI_DESKTOP_GID=$gid_number" \
+  --env "HOME=/tmp/oli-desktop-home-$uid_number" \
+  --env XDG_RUNTIME_DIR=/run/oli-desktop \
+  --env WAYLAND_DISPLAY=wayland-oli-desktop \
   "$image" "$weston_id" bash -ec '
     cp -a /mnt/lists/. /var/lib/apt/lists/
     cp /mnt/debs/*.deb /var/cache/apt/archives/
-    DEBIAN_FRONTEND=noninteractive apt-get --no-download install -y --no-install-recommends weston passwd util-linux > /var/log/lucia/install.log 2>&1 || { tail -40 /var/log/lucia/install.log; exit 1; }
-    getent group "$LUCIA_GID" >/dev/null || groupadd --gid "$LUCIA_GID" lucia
-    dpkg-query --show weston > /var/log/lucia/packages.txt
-    getent passwd "$LUCIA_UID" >/dev/null || useradd --uid "$LUCIA_UID" --gid "$LUCIA_GID" --home-dir "$HOME" --no-create-home --shell /usr/sbin/nologin lucia
-    install -d -o "$LUCIA_UID" -g "$LUCIA_GID" "$HOME"
-    exec setpriv --reuid="$LUCIA_UID" --regid="$LUCIA_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- weston --backend=headless-backend.so --socket=wayland-lucia --idle-time=0 --no-config --log=/var/log/lucia/weston.log
+    DEBIAN_FRONTEND=noninteractive apt-get --no-download install -y --no-install-recommends weston passwd util-linux > /var/log/oli-desktop/install.log 2>&1 || { tail -40 /var/log/oli-desktop/install.log; exit 1; }
+    getent group "$OLI_DESKTOP_GID" >/dev/null || groupadd --gid "$OLI_DESKTOP_GID" oli-desktop
+    dpkg-query --show weston > /var/log/oli-desktop/packages.txt
+    getent passwd "$OLI_DESKTOP_UID" >/dev/null || useradd --uid "$OLI_DESKTOP_UID" --gid "$OLI_DESKTOP_GID" --home-dir "$HOME" --no-create-home --shell /usr/sbin/nologin oli-desktop
+    install -d -o "$OLI_DESKTOP_UID" -g "$OLI_DESKTOP_GID" "$HOME"
+    exec setpriv --reuid="$OLI_DESKTOP_UID" --regid="$OLI_DESKTOP_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- weston --backend=headless-backend.so --socket=wayland-oli-desktop --idle-time=0 --no-config --log=/var/log/oli-desktop/weston.log
   '
 
 client_output=
@@ -132,11 +132,11 @@ if ! client_output=$(ctr run --rm \
   --mount "$client_log_mount" \
   --mount "$client_package_mount" \
   --mount "type=bind,src=$script_dir,dst=/opt,options=rbind:ro" \
-  --env "LUCIA_UID=$uid_number" \
-  --env "LUCIA_GID=$gid_number" \
-  --env "HOME=/tmp/lucia-home-$uid_number" \
-  --env XDG_RUNTIME_DIR=/run/lucia \
-  --env WAYLAND_DISPLAY=wayland-lucia \
+  --env "OLI_DESKTOP_UID=$uid_number" \
+  --env "OLI_DESKTOP_GID=$gid_number" \
+  --env "HOME=/tmp/oli-desktop-home-$uid_number" \
+  --env XDG_RUNTIME_DIR=/run/oli-desktop \
+  --env WAYLAND_DISPLAY=wayland-oli-desktop \
   --env GDK_BACKEND=wayland \
   --env GSK_RENDERER=cairo \
   --env GSETTINGS_BACKEND=memory \
@@ -145,13 +145,13 @@ if ! client_output=$(ctr run --rm \
   "$image" "$client_id" bash -ec '
     cp -a /mnt/lists/. /var/lib/apt/lists/
     cp /mnt/debs/*.deb /var/cache/apt/archives/
-    DEBIAN_FRONTEND=noninteractive apt-get --no-download install -y --no-install-recommends python3 python3-gi gir1.2-gtk-4.0 passwd util-linux > /var/log/lucia/install.log 2>&1 || { tail -40 /var/log/lucia/install.log; exit 1; }
-    getent group "$LUCIA_GID" >/dev/null || groupadd --gid "$LUCIA_GID" lucia
-    getent passwd "$LUCIA_UID" >/dev/null || useradd --uid "$LUCIA_UID" --gid "$LUCIA_GID" --home-dir "$HOME" --no-create-home --shell /usr/sbin/nologin lucia
-    install -d -o "$LUCIA_UID" -g "$LUCIA_GID" "$HOME"
-    dpkg-query --show python3 python3-gi gir1.2-gtk-4.0 libgtk-4-1 > /var/log/lucia/packages.txt
-    python3 -c "import os, time; p = \"/run/lucia/wayland-lucia\"; end = time.monotonic() + 20; exec(\"while time.monotonic() < end:\\n if os.path.exists(p): break\\n time.sleep(0.05)\"); raise SystemExit(0 if os.path.exists(p) else \"Wayland socket did not appear\")"
-    exec setpriv --reuid="$LUCIA_UID" --regid="$LUCIA_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- python3 /opt/launcher.py --smoke-click Files
+    DEBIAN_FRONTEND=noninteractive apt-get --no-download install -y --no-install-recommends python3 python3-gi gir1.2-gtk-4.0 passwd util-linux > /var/log/oli-desktop/install.log 2>&1 || { tail -40 /var/log/oli-desktop/install.log; exit 1; }
+    getent group "$OLI_DESKTOP_GID" >/dev/null || groupadd --gid "$OLI_DESKTOP_GID" oli-desktop
+    getent passwd "$OLI_DESKTOP_UID" >/dev/null || useradd --uid "$OLI_DESKTOP_UID" --gid "$OLI_DESKTOP_GID" --home-dir "$HOME" --no-create-home --shell /usr/sbin/nologin oli-desktop
+    install -d -o "$OLI_DESKTOP_UID" -g "$OLI_DESKTOP_GID" "$HOME"
+    dpkg-query --show python3 python3-gi gir1.2-gtk-4.0 libgtk-4-1 > /var/log/oli-desktop/packages.txt
+    python3 -c "import os, time; p = \"/run/oli-desktop/wayland-oli-desktop\"; end = time.monotonic() + 20; exec(\"while time.monotonic() < end:\\n if os.path.exists(p): break\\n time.sleep(0.05)\"); raise SystemExit(0 if os.path.exists(p) else \"Wayland socket did not appear\")"
+    exec setpriv --reuid="$OLI_DESKTOP_UID" --regid="$OLI_DESKTOP_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- python3 /opt/launcher.py --smoke-click Files
   ' 2>&1); then
   printf '%s\n' "$client_output" >&2
   [[ -f "$weston_logs/weston.log" ]] && tail -40 "$weston_logs/weston.log" >&2

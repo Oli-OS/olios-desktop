@@ -20,6 +20,8 @@
 
 #include "xdg-shell-client-protocol.h"
 
+#define LOGOUT_EXIT_STATUS 42
+
 struct background {
     struct wl_display *display;
     struct wl_registry *registry;
@@ -49,7 +51,13 @@ struct background {
     bool fullscreen;
     bool frame_presented;
     bool assistant_open;
+    bool smoke_action_tested;
+    unsigned int smoke_logout_stage;
     bool keyboard_focus;
+    bool logout_button_focused;
+    bool logout_confirmation_open;
+    bool logout_confirm_focused;
+    bool logout_requested;
     bool has_submission;
     bool pointer_position_valid;
     bool running;
@@ -81,6 +89,19 @@ struct desktop_layout {
     double menu_y;
     double menu_width;
     double menu_height;
+    double logout_x;
+    double logout_y;
+    double logout_width;
+    double logout_height;
+    double logout_dialog_x;
+    double logout_dialog_y;
+    double logout_dialog_width;
+    double logout_dialog_height;
+    double logout_cancel_x;
+    double logout_confirm_x;
+    double logout_button_y;
+    double logout_dialog_button_width;
+    double logout_dialog_button_height;
     double pin_size;
     double pin_gap;
     double panel_x;
@@ -93,6 +114,14 @@ struct desktop_layout {
     double prompt_height;
     double submit_x;
     double submit_width;
+    double home_x;
+    double home_width;
+    double heading_y;
+    double subtitle_y;
+    double action_x;
+    double action_y;
+    double action_width;
+    double action_height;
 };
 
 struct background_buffer {
@@ -150,6 +179,70 @@ static void cancel_request(struct background *app);
 static void submit_prompt(struct background *app);
 static void clear_conversation(struct background *app);
 
+static void open_logout_confirmation(struct background *app)
+{
+    app->logout_button_focused = false;
+    app->logout_confirmation_open = true;
+    app->logout_confirm_focused = false;
+    printf("LOGOUT_CONFIRMATION: state=open\n");
+    request_redraw(app);
+}
+
+static void cancel_logout_confirmation(struct background *app)
+{
+    app->logout_confirmation_open = false;
+    app->logout_button_focused = false;
+    printf("LOGOUT_CONFIRMATION: state=cancelled\n");
+    request_redraw(app);
+}
+
+static void confirm_logout(struct background *app, const char *source)
+{
+    cancel_request(app);
+    app->logout_requested = true;
+    app->running = false;
+    printf("LOGOUT_CONFIRMED: source=%s exit_status=%d\n", source,
+           LOGOUT_EXIT_STATUS);
+}
+
+static bool handle_logout_key(struct background *app, xkb_keysym_t keysym)
+{
+    if (app->logout_confirmation_open) {
+        if (keysym == XKB_KEY_Escape) {
+            cancel_logout_confirmation(app);
+            return true;
+        }
+        if (keysym == XKB_KEY_Tab) {
+            app->logout_confirm_focused = !app->logout_confirm_focused;
+            request_redraw(app);
+            return true;
+        }
+        if (keysym == XKB_KEY_Return || keysym == XKB_KEY_KP_Enter) {
+            if (app->logout_confirm_focused) {
+                confirm_logout(app, "keyboard");
+            } else {
+                cancel_logout_confirmation(app);
+            }
+            return true;
+        }
+        return false;
+    }
+    if (app->assistant_open) {
+        return false;
+    }
+    if (keysym == XKB_KEY_Tab) {
+        app->logout_button_focused = true;
+        request_redraw(app);
+        return true;
+    }
+    if ((keysym == XKB_KEY_Return || keysym == XKB_KEY_KP_Enter) &&
+        app->logout_button_focused) {
+        open_logout_confirmation(app);
+        return true;
+    }
+    return false;
+}
+
 static const char *output_transform_name(int32_t transform)
 {
     switch (transform) {
@@ -190,7 +283,7 @@ static void output_geometry(void *data, struct wl_output *output, int32_t x,
     (void)model;
     if (output == app->output) {
         app->output_geometry_received = true;
-        printf("LUCIA_OUTPUT_TRANSFORM: transform=%s\n",
+        printf("OLI_DESKTOP_OUTPUT_TRANSFORM: transform=%s\n",
                output_transform_name(transform));
     }
 }
@@ -235,7 +328,7 @@ static void pointer_enter(void *data, struct wl_pointer *pointer,
         app->running = false;
         return;
     }
-    printf("LUCIA_POINTER_CURSOR_SET: width=32 height=44 hotspot=2,2\n");
+    printf("OLI_DESKTOP_POINTER_CURSOR_SET: width=32 height=44 hotspot=2,2\n");
 }
 
 static void pointer_leave(void *data, struct wl_pointer *pointer,
@@ -274,7 +367,30 @@ static void pointer_button(void *data, struct wl_pointer *pointer,
         return;
     }
     layout = calculate_layout(app);
-    if (app->assistant_open &&
+    if (app->logout_confirmation_open &&
+        app->pointer_x >= layout.logout_cancel_x &&
+        app->pointer_x <= layout.logout_cancel_x +
+                              layout.logout_dialog_button_width &&
+        app->pointer_y >= layout.logout_button_y &&
+        app->pointer_y <= layout.logout_button_y +
+                              layout.logout_dialog_button_height) {
+        cancel_logout_confirmation(app);
+    } else if (app->logout_confirmation_open &&
+               app->pointer_x >= layout.logout_confirm_x &&
+               app->pointer_x <= layout.logout_confirm_x +
+                                     layout.logout_dialog_button_width &&
+               app->pointer_y >= layout.logout_button_y &&
+               app->pointer_y <= layout.logout_button_y +
+                                     layout.logout_dialog_button_height) {
+        confirm_logout(app, "pointer");
+    } else if (app->logout_confirmation_open) {
+        return;
+    } else if (app->pointer_x >= layout.logout_x &&
+               app->pointer_x <= layout.logout_x + layout.logout_width &&
+               app->pointer_y >= layout.logout_y &&
+               app->pointer_y <= layout.logout_y + layout.logout_height) {
+        open_logout_confirmation(app);
+    } else if (app->assistant_open &&
         app->pointer_x >= layout.panel_x + layout.panel_width - 44.0 &&
         app->pointer_x <= layout.panel_x + layout.panel_width - 12.0 &&
         app->pointer_y >= layout.panel_y + 12.0 &&
@@ -298,6 +414,13 @@ static void pointer_button(void *data, struct wl_pointer *pointer,
         } else {
             submit_prompt(app);
         }
+    } else if (!app->assistant_open &&
+               app->pointer_x >= layout.action_x &&
+               app->pointer_x <= layout.action_x + layout.action_width &&
+               app->pointer_y >= layout.action_y &&
+               app->pointer_y <= layout.action_y + layout.action_height) {
+        app->assistant_open = true;
+        request_redraw(app);
     } else if (app->pointer_x >= layout.menu_x &&
                app->pointer_x <= layout.menu_x + layout.menu_width &&
                app->pointer_y >= layout.menu_y &&
@@ -404,7 +527,7 @@ static void keyboard_leave(void *data, struct wl_keyboard *keyboard,
 
 static void submit_prompt(struct background *app)
 {
-    const char *socket_path = getenv("LUCIA_MODEL_SOCKET");
+    const char *socket_path = getenv("OLI_MODEL_SOCKET");
     struct sockaddr_un address = {.sun_family = AF_UNIX};
     size_t prompt_length = strlen(app->prompt);
     size_t socket_path_length;
@@ -646,11 +769,16 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard,
     xkb_state_update_key(app->xkb_state, keycode,
                          state == WL_KEYBOARD_KEY_STATE_PRESSED
                              ? XKB_KEY_DOWN : XKB_KEY_UP);
-    if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->assistant_open ||
-        !app->keyboard_focus) {
+    if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->keyboard_focus) {
         return;
     }
     keysym = xkb_state_key_get_one_sym(app->xkb_state, keycode);
+    if (handle_logout_key(app, keysym)) {
+        return;
+    }
+    if (app->logout_confirmation_open || !app->assistant_open) {
+        return;
+    }
     if (keysym == XKB_KEY_Escape) {
         if (app->request_active) {
             cancel_request(app);
@@ -839,7 +967,7 @@ static bool create_cursor_surface(struct background *app)
     cairo_surface_t *image = NULL;
     cairo_t *context = NULL;
     void *memory = MAP_FAILED;
-    int fd = memfd_create("lucia-pointer-cursor", MFD_CLOEXEC);
+    int fd = memfd_create("oli-desktop-pointer-cursor", MFD_CLOEXEC);
     bool success = false;
 
     if (fd < 0 || ftruncate(fd, (off_t)memory_size) < 0) {
@@ -996,11 +1124,41 @@ static struct desktop_layout calculate_layout(struct background *app)
     double height_scale = height / 900.0;
     double panel_bottom;
     double available_width;
+    double home_margin;
+    double home_block_height;
 
     layout.scale = clamp(width_scale < height_scale ? width_scale : height_scale,
                          0.75, 1.35);
     layout.taskbar_height = clamp(64.0 * layout.scale, 48.0, 72.0);
     layout.taskbar_y = height - layout.taskbar_height;
+    layout.logout_width = clamp(128.0 * layout.scale, 104.0, 144.0);
+    layout.logout_height = clamp(40.0 * layout.scale, 36.0, 46.0);
+    layout.logout_x = width - clamp(24.0 * layout.scale, 16.0, 30.0) -
+                      layout.logout_width;
+    layout.logout_y = layout.taskbar_y +
+                      (layout.taskbar_height - layout.logout_height) / 2.0;
+    layout.logout_dialog_width = clamp(width * 0.54, 320.0, 480.0);
+    if (layout.logout_dialog_width > width - 32.0) {
+        layout.logout_dialog_width = width - 32.0;
+    }
+    layout.logout_dialog_height = clamp(204.0 * layout.scale, 190.0, 224.0);
+    layout.logout_dialog_x = (width - layout.logout_dialog_width) / 2.0;
+    layout.logout_dialog_y =
+        (layout.taskbar_y - layout.logout_dialog_height) / 2.0;
+    layout.logout_dialog_button_width =
+        clamp((layout.logout_dialog_width - 60.0) / 2.0, 96.0, 132.0);
+    layout.logout_dialog_button_height = clamp(40.0 * layout.scale, 36.0, 44.0);
+    layout.logout_button_y = layout.logout_dialog_y +
+                             layout.logout_dialog_height -
+                             layout.logout_dialog_button_height -
+                             20.0 * layout.scale;
+    layout.logout_confirm_x = layout.logout_dialog_x +
+                              layout.logout_dialog_width -
+                              20.0 * layout.scale -
+                              layout.logout_dialog_button_width;
+    layout.logout_cancel_x = layout.logout_confirm_x -
+                             12.0 * layout.scale -
+                             layout.logout_dialog_button_width;
     layout.menu_width = clamp(126.0 * layout.scale, 100.0, 150.0);
     layout.menu_height = clamp(42.0 * layout.scale, 36.0, 48.0);
     layout.menu_x = (width - layout.menu_width) / 2.0;
@@ -1013,6 +1171,27 @@ static struct desktop_layout calculate_layout(struct background *app)
     if (layout.pin_size * 3.0 + layout.pin_gap * 2.0 > available_width) {
         layout.pin_size = (available_width - layout.pin_gap * 2.0) / 3.0;
     }
+
+    home_margin = clamp(width * 0.07, 32.0, 104.0);
+    layout.home_width = width - home_margin * 2.0;
+    if (layout.home_width > 920.0 * layout.scale) {
+        layout.home_width = 920.0 * layout.scale;
+    }
+    layout.home_x = (width - layout.home_width) / 2.0;
+    layout.action_width = clamp(layout.home_width * 0.68,
+                                320.0 * layout.scale,
+                                560.0 * layout.scale);
+    if (layout.action_width > layout.home_width) {
+        layout.action_width = layout.home_width;
+    }
+    layout.action_height = clamp(120.0 * layout.scale, 96.0, 142.0);
+    home_block_height = 40.0 * layout.scale + 30.0 * layout.scale +
+                        36.0 * layout.scale + layout.action_height;
+    layout.heading_y = (layout.taskbar_y - home_block_height) / 2.0 +
+                       40.0 * layout.scale;
+    layout.subtitle_y = layout.heading_y + 30.0 * layout.scale;
+    layout.action_x = layout.home_x;
+    layout.action_y = layout.subtitle_y + 36.0 * layout.scale;
 
     layout.panel_width = clamp(width * 0.82, 320.0, 620.0);
     if (layout.panel_width > width - 32.0) {
@@ -1058,7 +1237,7 @@ static struct background_buffer *create_background_buffer(
     frame->width = app->width;
     frame->height = app->height;
     frame->memory_size = (size_t)byte_count;
-    fd = memfd_create("lucia-background", MFD_CLOEXEC);
+    fd = memfd_create("oli-desktop-background", MFD_CLOEXEC);
     if (fd < 0 || ftruncate(fd, (off_t)frame->memory_size) < 0) {
         perror("BACKGROUND_ERROR: create shared-memory buffer");
         if (fd >= 0) {
@@ -1260,6 +1439,63 @@ static void render_desktop(struct background *app,
     cairo_paint(context);
     cairo_pattern_destroy(background);
 
+    draw_text(context, layout.home_x, 58.0 * layout.scale,
+              10.0 * layout.scale, "OLI DESKTOP", true,
+              0.72, 0.82, 0.74);
+    cairo_set_source_rgb(context, 0.91, 0.55, 0.37);
+    cairo_rectangle(context, layout.home_x, 72.0 * layout.scale,
+                    30.0 * layout.scale, 2.0 * layout.scale);
+    cairo_fill(context);
+    draw_text(context, layout.home_x, layout.heading_y,
+              34.0 * layout.scale, "Your workspace", true,
+              0.95, 0.95, 0.89);
+    draw_text(context, layout.home_x, layout.subtitle_y,
+              14.0 * layout.scale, "A clear place for focused work.", false,
+              0.72, 0.80, 0.74);
+
+    cairo_set_source_rgb(context, 0.93, 0.93, 0.86);
+    cairo_rectangle(context, layout.action_x, layout.action_y,
+                    layout.action_width, layout.action_height);
+    cairo_fill(context);
+    cairo_set_source_rgb(context, 0.91, 0.55, 0.37);
+    cairo_rectangle(context, layout.action_x, layout.action_y,
+                    4.0 * layout.scale, layout.action_height);
+    cairo_fill(context);
+    cairo_set_source_rgb(context, 0.12, 0.22, 0.19);
+    cairo_arc(context, layout.action_x + 34.0 * layout.scale,
+              layout.action_y + layout.action_height / 2.0,
+              15.0 * layout.scale, 0.0, 6.28318530718);
+    cairo_fill(context);
+    cairo_set_source_rgb(context, 0.93, 0.75, 0.56);
+    cairo_set_line_width(context, 1.5 * layout.scale);
+    cairo_arc(context, layout.action_x + 34.0 * layout.scale,
+              layout.action_y + layout.action_height / 2.0,
+              6.0 * layout.scale, 0.2, 5.7);
+    cairo_stroke(context);
+    draw_text(context, layout.action_x + 62.0 * layout.scale,
+              layout.action_y + 44.0 * layout.scale,
+              15.0 * layout.scale, "Open Oli", true,
+              0.12, 0.18, 0.16);
+    draw_text(context, layout.action_x + 62.0 * layout.scale,
+              layout.action_y + 68.0 * layout.scale,
+              11.0 * layout.scale,
+              "Start a conversation with your local assistant.", false,
+              0.32, 0.39, 0.35);
+    cairo_set_source_rgb(context, 0.12, 0.22, 0.19);
+    cairo_set_line_width(context, 2.0 * layout.scale);
+    cairo_move_to(context, layout.action_x + layout.action_width -
+                            30.0 * layout.scale,
+                  layout.action_y + layout.action_height / 2.0 -
+                            5.0 * layout.scale);
+    cairo_line_to(context, layout.action_x + layout.action_width -
+                            24.0 * layout.scale,
+                  layout.action_y + layout.action_height / 2.0);
+    cairo_line_to(context, layout.action_x + layout.action_width -
+                            30.0 * layout.scale,
+                  layout.action_y + layout.action_height / 2.0 +
+                            5.0 * layout.scale);
+    cairo_stroke(context);
+
     cairo_set_source_rgba(context, 0.90, 0.91, 0.83, 0.045);
     cairo_set_line_width(context, 1.0);
     cairo_move_to(context, width * 0.70, 0);
@@ -1286,7 +1522,32 @@ static void render_desktop(struct background *app,
     cairo_fill(context);
         draw_text(context, layout.menu_x + 31.0 * layout.scale,
             layout.menu_y + layout.menu_height * 0.65, 14.0 * layout.scale,
-            "LUCIA", true, 0.93, 0.94, 0.88);
+            "Oli", true, 0.93, 0.94, 0.88);
+
+        cairo_set_source_rgb(context, 0.14, 0.20, 0.17);
+        cairo_rectangle(context, layout.logout_x, layout.logout_y,
+                        layout.logout_width, layout.logout_height);
+        cairo_fill(context);
+        cairo_set_source_rgb(context, 0.76, 0.55, 0.43);
+        cairo_set_line_width(context, app->logout_button_focused ? 2.5 : 1.0);
+        cairo_rectangle(context, layout.logout_x, layout.logout_y,
+                        layout.logout_width, layout.logout_height);
+        cairo_stroke(context);
+        cairo_set_source_rgb(context, 0.89, 0.66, 0.51);
+        cairo_set_line_width(context, 1.7 * layout.scale);
+        cairo_arc(context, layout.logout_x + 17.0 * layout.scale,
+                  layout.logout_y + layout.logout_height / 2.0,
+                  6.0 * layout.scale, 0.75, 5.5);
+        cairo_stroke(context);
+        cairo_move_to(context, layout.logout_x + 17.0 * layout.scale,
+                      layout.logout_y + 5.0 * layout.scale);
+        cairo_line_to(context, layout.logout_x + 17.0 * layout.scale,
+                      layout.logout_y + layout.logout_height / 2.0);
+        cairo_stroke(context);
+        draw_text(context, layout.logout_x + 31.0 * layout.scale,
+                  layout.logout_y + layout.logout_height * 0.65,
+                  clamp(12.0 * layout.scale, 11.0, 14.0), "Log out", true,
+                  0.93, 0.82, 0.73);
 
         if (layout.pin_size >= 18.0) {
          double pins_x = layout.menu_x + layout.menu_width + layout.pin_gap;
@@ -1313,7 +1574,7 @@ static void render_desktop(struct background *app,
                    layout.panel_width, 1.0);
          cairo_fill(context);
          draw_text(context, layout.panel_x + 20.0,
-                layout.panel_y + 32.0, 17.0, "LUCIA", true,
+                layout.panel_y + 32.0, 17.0, "Oli", true,
                 0.93, 0.94, 0.88);
          draw_text(context, layout.panel_x + 20.0,
                 layout.panel_y + 52.0, 10.0, "Conversation", false,
@@ -1389,22 +1650,99 @@ static void render_desktop(struct background *app,
                    layout.prompt_y + 28.0, 10.0,
                    app->request_active ? "CANCEL" : "SEND", true,
                    0.93, 0.94, 0.88);
-         printf("LUCIA_ASSISTANT_PANEL: state=open x=%.0f y=%.0f width=%.0f height=%.0f\n",
+         printf("OLI_DESKTOP_ASSISTANT_PANEL: state=open x=%.0f y=%.0f width=%.0f height=%.0f\n",
              layout.panel_x, layout.panel_y, layout.panel_width,
              layout.panel_height);
-         printf("LUCIA_ASSISTANT_PROMPT: x=%.0f y=%.0f width=%.0f height=%.0f\n",
+         printf("OLI_DESKTOP_ASSISTANT_PROMPT: x=%.0f y=%.0f width=%.0f height=%.0f\n",
              layout.prompt_x, layout.prompt_y, layout.prompt_width,
              layout.prompt_height);
         }
 
+    if (app->logout_confirmation_open) {
+        cairo_set_source_rgba(context, 0.015, 0.025, 0.021, 0.78);
+        cairo_rectangle(context, 0, 0, width, height);
+        cairo_fill(context);
+        cairo_set_source_rgb(context, 0.91, 0.92, 0.86);
+        cairo_rectangle(context, layout.logout_dialog_x,
+                        layout.logout_dialog_y, layout.logout_dialog_width,
+                        layout.logout_dialog_height);
+        cairo_fill(context);
+        cairo_set_source_rgb(context, 0.91, 0.55, 0.37);
+        cairo_rectangle(context, layout.logout_dialog_x,
+                        layout.logout_dialog_y, 4.0 * layout.scale,
+                        layout.logout_dialog_height);
+        cairo_fill(context);
+        draw_text(context, layout.logout_dialog_x + 24.0 * layout.scale,
+                  layout.logout_dialog_y + 42.0 * layout.scale,
+                  20.0 * layout.scale, "Log out of Oli Desktop?", true,
+                  0.12, 0.18, 0.16);
+        draw_wrapped_text(
+            context, layout.logout_dialog_x + 24.0 * layout.scale,
+            layout.logout_dialog_y + 76.0 * layout.scale,
+            layout.logout_dialog_width - 48.0 * layout.scale,
+            12.0 * layout.scale,
+            "Your desktop session will end and return to the sign-in screen.",
+            false, 0.30, 0.37, 0.33, 2);
+
+        cairo_set_source_rgb(context, 0.77, 0.79, 0.72);
+        cairo_rectangle(context, layout.logout_cancel_x,
+                        layout.logout_button_y,
+                        layout.logout_dialog_button_width,
+                        layout.logout_dialog_button_height);
+        cairo_fill(context);
+        cairo_set_source_rgb(context, 0.15, 0.21, 0.18);
+        cairo_set_line_width(context, app->logout_confirm_focused ? 1.0 : 2.5);
+        cairo_rectangle(context, layout.logout_cancel_x,
+                        layout.logout_button_y,
+                        layout.logout_dialog_button_width,
+                        layout.logout_dialog_button_height);
+        cairo_stroke(context);
+        draw_text(context, layout.logout_cancel_x + 16.0 * layout.scale,
+                  layout.logout_button_y +
+                      layout.logout_dialog_button_height * 0.66,
+                  12.0 * layout.scale, "Cancel", true, 0.12, 0.18, 0.16);
+
+        cairo_set_source_rgb(context, 0.52, 0.22, 0.17);
+        cairo_rectangle(context, layout.logout_confirm_x,
+                        layout.logout_button_y,
+                        layout.logout_dialog_button_width,
+                        layout.logout_dialog_button_height);
+        cairo_fill(context);
+        cairo_set_source_rgb(context, 0.15, 0.21, 0.18);
+        cairo_set_line_width(context, app->logout_confirm_focused ? 2.5 : 1.0);
+        cairo_rectangle(context, layout.logout_confirm_x,
+                        layout.logout_button_y,
+                        layout.logout_dialog_button_width,
+                        layout.logout_dialog_button_height);
+        cairo_stroke(context);
+        draw_text(context, layout.logout_confirm_x + 12.0 * layout.scale,
+                  layout.logout_button_y +
+                      layout.logout_dialog_button_height * 0.66,
+                  12.0 * layout.scale, "Log out", true, 0.98, 0.91, 0.83);
+         printf("OLI_DESKTOP_LOGOUT_DIALOG: state=open x=%.0f y=%.0f width=%.0f height=%.0f cancel_x=%.0f confirm_x=%.0f button_y=%.0f button_width=%.0f button_height=%.0f\n",
+               layout.logout_dialog_x, layout.logout_dialog_y,
+             layout.logout_dialog_width, layout.logout_dialog_height,
+             layout.logout_cancel_x, layout.logout_confirm_x,
+             layout.logout_button_y, layout.logout_dialog_button_width,
+             layout.logout_dialog_button_height);
+    }
+
     cairo_destroy(context);
     cairo_surface_flush(frame->surface);
-    printf("LUCIA_TASKBAR_LAYOUT: edge=bottom x=0 y=%u width=%u height=%.0f\n",
+        printf("OLI_DESKTOP_HOME_LAYOUT: width=%u height=%u heading_x=%.0f heading_y=%.0f action_x=%.0f action_y=%.0f action_width=%.0f action_height=%.0f\n",
+            app->width, app->height, layout.home_x, layout.heading_y,
+            layout.action_x, layout.action_y, layout.action_width,
+            layout.action_height);
+        printf("OLI_DESKTOP_HOME_ACTION: label=Open-Oli target=assistant\n");
+    printf("OLI_DESKTOP_TASKBAR_LAYOUT: edge=bottom x=0 y=%u width=%u height=%.0f\n",
             (unsigned int)layout.taskbar_y, app->width, layout.taskbar_height);
-        printf("LUCIA_MENU_LAYOUT: center x=%.0f y=%.0f width=%.0f height=%.0f\n",
+        printf("OLI_DESKTOP_LOGOUT_CONTROL: x=%.0f y=%.0f width=%.0f height=%.0f label=Log-out\n",
+               layout.logout_x, layout.logout_y, layout.logout_width,
+               layout.logout_height);
+        printf("OLI_DESKTOP_MENU_LAYOUT: center x=%.0f y=%.0f width=%.0f height=%.0f\n",
             layout.menu_x, layout.menu_y, layout.menu_width, layout.menu_height);
-        printf("LUCIA_DEMO_PINS: count=3 launch=disabled\n");
-        printf("LUCIA_SHELL_ELEMENTS: identity=LUCIA menu=center apps=demo-pinned conversation=%s status=none\n",
+        printf("OLI_DESKTOP_DEMO_PINS: count=3 launch=disabled\n");
+        printf("OLI_DESKTOP_SHELL_ELEMENTS: identity=Oli menu=center apps=demo-pinned conversation=%s status=none\n",
             app->assistant_open ? "open" : "closed");
 }
 
@@ -1454,10 +1792,84 @@ static void frame_done(void *data, struct wl_callback *callback,
     wl_callback_destroy(callback);
     app->frame_callback = NULL;
     app->frame_presented = true;
-    printf("LUCIA_BACKGROUND_FRAME_PRESENTED\n");
+    printf("OLI_DESKTOP_BACKGROUND_FRAME_PRESENTED\n");
     printf("LIFECYCLE: running\n");
     if (app->smoke) {
-        app->running = false;
+        if (!app->smoke_action_tested) {
+            struct desktop_layout layout = calculate_layout(app);
+            app->smoke_action_tested = true;
+            app->assistant_open = false;
+            app->pointer_x = layout.action_x + layout.action_width / 2.0;
+            app->pointer_y = layout.action_y + layout.action_height / 2.0;
+            app->pointer_position_valid = true;
+            pointer_button(app, NULL, 0, 0, BTN_LEFT,
+                           WL_POINTER_BUTTON_STATE_PRESSED);
+            app->pointer_position_valid = false;
+            if (app->assistant_open) {
+                printf("OLI_DESKTOP_HOME_ACTION_ACTIVATED: input=pointer state=assistant-open\n");
+            } else {
+                fprintf(stderr, "BACKGROUND_ERROR: home action did not open assistant\n");
+                app->running = false;
+            }
+        } else if (app->smoke_logout_stage == 0) {
+            struct desktop_layout layout = calculate_layout(app);
+            app->pointer_x = layout.logout_x + layout.logout_width / 2.0;
+            app->pointer_y = layout.logout_y + layout.logout_height / 2.0;
+            app->pointer_position_valid = true;
+            pointer_button(app, NULL, 0, 0, BTN_LEFT,
+                           WL_POINTER_BUTTON_STATE_PRESSED);
+            app->pointer_position_valid = false;
+            if (app->logout_confirmation_open) {
+                printf("OLI_DESKTOP_LOGOUT_CONTROL_ACTIVATED: input=pointer state=confirmation-open\n");
+                app->smoke_logout_stage = 1;
+            } else {
+                fprintf(stderr, "BACKGROUND_ERROR: logout control did not open confirmation\n");
+                app->running = false;
+            }
+        } else if (app->smoke_logout_stage == 1) {
+            struct desktop_layout layout = calculate_layout(app);
+            app->pointer_x = layout.logout_cancel_x +
+                            layout.logout_dialog_button_width / 2.0;
+            app->pointer_y = layout.logout_button_y +
+                             layout.logout_dialog_button_height / 2.0;
+            app->pointer_position_valid = true;
+            pointer_button(app, NULL, 0, 0, BTN_LEFT,
+                           WL_POINTER_BUTTON_STATE_PRESSED);
+            app->pointer_position_valid = false;
+            if (!app->logout_confirmation_open && !app->logout_requested) {
+                printf("OLI_DESKTOP_LOGOUT_CANCELLED: input=pointer state=session-active\n");
+                app->smoke_logout_stage = 2;
+            } else {
+                fprintf(stderr, "BACKGROUND_ERROR: cancelling logout ended the session\n");
+                app->running = false;
+            }
+        } else if (app->smoke_logout_stage == 2) {
+            struct desktop_layout layout = calculate_layout(app);
+            app->pointer_x = layout.logout_x + layout.logout_width / 2.0;
+            app->pointer_y = layout.logout_y + layout.logout_height / 2.0;
+            app->pointer_position_valid = true;
+            pointer_button(app, NULL, 0, 0, BTN_LEFT,
+                           WL_POINTER_BUTTON_STATE_PRESSED);
+            app->pointer_position_valid = false;
+            if (app->logout_confirmation_open) {
+                app->smoke_logout_stage = 3;
+            } else {
+                fprintf(stderr, "BACKGROUND_ERROR: logout confirmation did not reopen\n");
+                app->running = false;
+            }
+        } else if (app->smoke_logout_stage == 3) {
+            if (!app->logout_confirmation_open ||
+                !handle_logout_key(app, XKB_KEY_Tab) ||
+                !app->logout_confirm_focused ||
+                !handle_logout_key(app, XKB_KEY_Return) ||
+                !app->logout_requested) {
+                fprintf(stderr, "BACKGROUND_ERROR: keyboard logout confirmation failed\n");
+                app->running = false;
+            } else {
+                printf("OLI_DESKTOP_LOGOUT_KEYBOARD_CONFIRMED: exit_status=%d\n",
+                       LOGOUT_EXIT_STATUS);
+            }
+        }
     }
 }
 
@@ -1489,7 +1901,7 @@ static void xdg_surface_configure(void *data, struct xdg_surface *surface,
             return;
         }
         app->configured = true;
-        printf("LUCIA_BACKGROUND_FULLSCREEN_CONFIGURED: %ux%u\n",
+        printf("OLI_DESKTOP_BACKGROUND_FULLSCREEN_CONFIGURED: %ux%u\n",
                app->width, app->height);
         activate_buffer(app, frame);
     } else {
@@ -1649,7 +2061,9 @@ int main(int argc, char **argv)
             provider_handle_event(&app, descriptors[1].revents);
         }
     }
-    result = app.frame_presented ? EXIT_SUCCESS : EXIT_FAILURE;
+    result = app.logout_requested ? LOGOUT_EXIT_STATUS
+                                  : (app.frame_presented ? EXIT_SUCCESS
+                                                         : EXIT_FAILURE);
 
 shutdown:
     destroy_background(&app);

@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly containerd_namespace='oli-desktop'
+readonly image='localhost/olios/oli-desktop:20261104-neutral-v1'
+readonly seatd_socket='/run/seatd.sock'
+readonly default_weston_config='/etc/oli-desktop/weston-default.ini'
+readonly host_weston_config='/etc/oli-desktop/weston.ini'
+readonly -a linux_capabilities=(
+  CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_FSETID
+  CAP_KILL CAP_SETGID CAP_SETUID CAP_SETPCAP CAP_LINUX_IMMUTABLE
+  CAP_NET_BIND_SERVICE CAP_NET_BROADCAST CAP_NET_ADMIN CAP_NET_RAW
+  CAP_IPC_LOCK CAP_IPC_OWNER CAP_SYS_MODULE CAP_SYS_RAWIO CAP_SYS_CHROOT
+  CAP_SYS_PTRACE CAP_SYS_PACCT CAP_SYS_ADMIN CAP_SYS_BOOT CAP_SYS_NICE
+  CAP_SYS_RESOURCE CAP_SYS_TIME CAP_SYS_TTY_CONFIG CAP_MKNOD CAP_LEASE
+  CAP_AUDIT_WRITE CAP_AUDIT_CONTROL CAP_SETFCAP CAP_MAC_OVERRIDE CAP_MAC_ADMIN
+  CAP_SYSLOG CAP_WAKE_ALARM CAP_BLOCK_SUSPEND CAP_AUDIT_READ CAP_PERFMON
+  CAP_BPF CAP_CHECKPOINT_RESTORE
+)
+readonly uid_number=$(id -u)
+readonly gid_number=$(id -g)
+readonly session_token="${uid_number}-$$"
+readonly wayland_display="wayland-oli-desktop-${session_token}"
+readonly weston_id="weston-${session_token}"
+readonly runtime_dir="${XDG_RUNTIME_DIR:?greetd did not provide XDG_RUNTIME_DIR}/oli-desktop"
+readonly diagnostics_dir="${HOME:?greetd did not provide HOME}/.local/state/oli-desktop"
+readonly session_log="$diagnostics_dir/session-${session_token}.log"
+readonly seatd_group_id=$(getent group video | cut -d: -f3)
+capability_drop_args=()
+weston_config_mount_args=()
+weston_config_args=(--config="$default_weston_config")
+capability_ceiling=$(</proc/sys/kernel/cap_last_cap)
+
+if [[ "$(id -u)" -eq 0 ]]; then
+  printf '%s\n' 'Refusing to run the desktop session as root.' >&2
+  exit 1
+fi
+if [[ ! -d "$diagnostics_dir" ]]; then
+  install -d -m 0700 "$diagnostics_dir"
+fi
+if [[ "$(stat -c '%u:%g:%a' "$diagnostics_dir")" != "$uid_number:$gid_number:700" ]]; then
+  printf 'Unexpected diagnostics directory ownership or permissions: %s\n' "$diagnostics_dir" >&2
+  exit 1
+fi
+(umask 077; : >> "$session_log")
+chmod 0600 "$session_log"
+exec 2>> "$session_log"
+printf 'SESSION_START: timestamp=%s pid=%s\n' "$(date --utc --iso-8601=seconds)" "$$"
+
+if [[ ! "$capability_ceiling" =~ ^[0-9]+$ || "$capability_ceiling" -ge "${#linux_capabilities[@]}" ]]; then
+  printf 'Unsupported kernel capability ceiling: %s\n' "$capability_ceiling" >&2
+  exit 1
+fi
+for ((capability_index = 0; capability_index <= capability_ceiling; capability_index++)); do
+  capability_drop_args+=(--cap-drop "${linux_capabilities[$capability_index]}")
+done
+
+if [[ ! "$seatd_group_id" =~ ^[0-9]+$ || ! -S "$seatd_socket" ]]; then
+  printf '%s\n' 'The seatd socket or its video group is unavailable.' >&2
+  exit 1
+fi
+if [[ ! -d "$runtime_dir" ]]; then
+  install -d -m 0700 "$runtime_dir"
+fi
+if [[ "$(stat -c '%u:%g:%a' "$runtime_dir")" != "$uid_number:$gid_number:700" ]]; then
+  printf 'Unexpected session runtime ownership or permissions: %s\n' "$runtime_dir" >&2
+  exit 1
+fi
+
+containerd() {
+  sudo -n ctr --namespace "$containerd_namespace" "$@"
+}
+
+if ! sudo -n true; then
+  printf '%s\n' 'A non-interactive sudo policy is required to start the isolated desktop tasks.' >&2
+  exit 1
+fi
+if ! containerd images list | awk -v image="$image" '$1 == image { found = 1 } END { exit !found }'; then
+  printf 'Desktop image is not installed in containerd namespace %s: %s\n' \
+    "$containerd_namespace" "$image" >&2
+  exit 1
+fi
+
+runtime_mount="type=bind,src=$runtime_dir,dst=/run/oli-desktop,options=rbind:rw"
+seatd_mount="type=bind,src=$seatd_socket,dst=$seatd_socket,options=rbind:rw"
+udev_mount='type=bind,src=/run/udev,dst=/run/udev,options=rbind:ro'
+sys_mount='type=bind,src=/sys,dst=/sys,options=rbind:ro'
+diagnostics_mount="type=bind,src=$diagnostics_dir,dst=/var/log/oli-desktop,options=rbind:rw"
+if [[ -f "$host_weston_config" ]]; then
+  weston_config_mount_args+=(
+    --mount "type=bind,src=$host_weston_config,dst=/run/oli-desktop/weston.ini,options=rbind:ro"
+  )
+  weston_config_args=(--config=/run/oli-desktop/weston.ini)
+fi
+weston_started=0
+
+cleanup() {
+  local exit_code=$?
+  trap - EXIT INT TERM HUP
+  set +e
+  printf 'SESSION_EXIT: timestamp=%s status=%s\n' "$(date --utc --iso-8601=seconds)" "$exit_code" >&2
+  if [[ "$weston_started" -eq 1 ]]; then
+    containerd tasks kill --signal SIGTERM "$weston_id" >/dev/null 2>&1
+    containerd tasks delete --force "$weston_id" >/dev/null 2>&1
+    containerd containers delete "$weston_id" >/dev/null 2>&1
+  fi
+  exit "$exit_code"
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+containerd run --detach \
+  --device /dev/tty2 \
+  --user "$uid_number:$seatd_group_id" \
+  "${capability_drop_args[@]}" \
+  --mount "$runtime_mount" \
+  --mount "$seatd_mount" \
+  --mount "$udev_mount" \
+  --mount "$sys_mount" \
+  --mount "$diagnostics_mount" \
+  "${weston_config_mount_args[@]}" \
+  --env LIBSEAT_BACKEND=seatd \
+  --env "WAYLAND_DISPLAY=$wayland_display" \
+  --env XDG_RUNTIME_DIR=/run/oli-desktop \
+  --env HOME=/tmp \
+  "$image" "$weston_id" \
+  weston \
+    --backend=drm-backend.so \
+    --shell=kiosk-shell.so \
+    --socket="$wayland_display" \
+    --idle-time=0 \
+    "${weston_config_args[@]}" \
+    --log="/var/log/oli-desktop/weston-${session_token}.log"
+weston_started=1
+
+socket_ready=0
+for attempt in {1..120}; do
+  if [[ -S "$runtime_dir/$wayland_display" ]]; then
+    socket_ready=1
+    break
+  fi
+  if ! containerd tasks list | awk -v id="$weston_id" '$1 == id { found = 1 } END { exit !found }'; then
+    break
+  fi
+  sleep 0.25
+done
+if [[ "$socket_ready" -ne 1 ]]; then
+  if [[ -f "$runtime_dir/weston.log" ]]; then
+    cat "$runtime_dir/weston.log" >&2
+  fi
+  printf '%s\n' 'Weston did not create its Wayland socket.' >&2
+  exit 1
+fi
+
+if containerd run --rm \
+  --user "$uid_number:$gid_number" \
+  "${capability_drop_args[@]}" \
+  --mount "$runtime_mount" \
+  --env "OLI_DESKTOP_UID=$uid_number" \
+  --env XDG_RUNTIME_DIR=/run/oli-desktop \
+  --env "WAYLAND_DISPLAY=$wayland_display" \
+  --env HOME=/tmp \
+  "$image" "client-${session_token}" \
+  /usr/local/bin/oli-desktop-background-prototype; then
+  client_exit=0
+else
+  client_exit=$?
+fi
+printf 'CLIENT_EXIT: timestamp=%s status=%s\n' "$(date --utc --iso-8601=seconds)" "$client_exit" >&2
+exit "$client_exit"

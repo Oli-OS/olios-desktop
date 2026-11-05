@@ -42,7 +42,7 @@ def main():
         raise SystemExit("no Wayland display is available")
     print("WAYLAND_CONNECTED", flush=True)
 
-    window = Gtk.Window(title="LUCIA Launcher (Experimental)")
+    window = Gtk.Window(title="Oli Desktop Launcher (Experimental)")
     window.set_default_size(420, 260)
 
     layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -51,7 +51,7 @@ def main():
     layout.set_margin_start(20)
     layout.set_margin_end(20)
 
-    heading = Gtk.Label(label="LUCIA Launcher")
+    heading = Gtk.Label(label="Oli Desktop Launcher")
     heading.set_xalign(0)
     layout.append(heading)
 

@@ -14,7 +14,7 @@ fi
 sudo -n true
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-work_dir=$(mktemp -d "${TMPDIR:-/tmp}/lucia-gui-headless.XXXXXXXX")
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/oli-desktop-gui-headless.XXXXXXXX")
 runtime_dir="$work_dir/runtime"
 weston_logs="$work_dir/weston"
 client_logs="$work_dir/client"
@@ -30,7 +30,7 @@ if [[ "$runtime_owner" != "$uid_number:$gid_number:700" ]]; then
   printf 'Unexpected private runtime directory ownership/mode: %s\n' "$runtime_owner" >&2
   exit 1
 fi
-namespace="lucia-gui-${uid_number}-$(date +%s)-$$"
+namespace="oli-desktop-gui-${uid_number}-$(date +%s)-$$"
 image="docker.io/library/ubuntu:26.04"
 weston_id=weston
 client_id=client
@@ -74,7 +74,7 @@ cleanup() {
     done
   fi
 
-  if [[ -d "$work_dir" && "$work_dir" == "${TMPDIR:-/tmp}"/lucia-gui-headless.* ]]; then
+  if [[ -d "$work_dir" && "$work_dir" == "${TMPDIR:-/tmp}"/oli-desktop-gui-headless.* ]]; then
     sudo -n rm -rf -- "$work_dir"
   fi
   if [[ "$namespace_created" -eq 1 ]]; then
@@ -92,13 +92,13 @@ if ! sudo -n ctr -n "$namespace" images pull --platform linux/amd64 "$image" >"$
   exit 1
 fi
 
-socket_mount="type=bind,src=$runtime_dir,dst=/run/lucia,options=rbind:rw"
-weston_config_mount="type=bind,src=$weston_config,dst=/run/lucia/weston.ini,options=rbind:ro"
-weston_log_mount="type=bind,src=$weston_logs,dst=/var/log/lucia,options=rbind:rw"
-client_log_mount="type=bind,src=$client_logs,dst=/var/log/lucia,options=rbind:rw"
+socket_mount="type=bind,src=$runtime_dir,dst=/run/oli-desktop,options=rbind:rw"
+weston_config_mount="type=bind,src=$weston_config,dst=/run/oli-desktop/weston.ini,options=rbind:ro"
+weston_log_mount="type=bind,src=$weston_logs,dst=/var/log/oli-desktop,options=rbind:rw"
+client_log_mount="type=bind,src=$client_logs,dst=/var/log/oli-desktop,options=rbind:rw"
 weston_package_mount="type=bind,src=$weston_packages,dst=/mnt,options=rbind:ro"
 client_package_mount="type=bind,src=$client_packages,dst=/mnt,options=rbind:ro"
-source_mount="type=bind,src=$script_dir,dst=/opt/lucia,options=rbind:ro"
+source_mount="type=bind,src=$script_dir,dst=/opt/oli-desktop,options=rbind:ro"
 
 fetch_packages() {
   local task_id=$1
@@ -126,20 +126,20 @@ sudo -n ctr -n "$namespace" run --detach \
   --mount "$weston_config_mount" \
   --mount "$weston_log_mount" \
   --mount "$weston_package_mount" \
-  --env "LUCIA_UID=$uid_number" \
-  --env "LUCIA_GID=$gid_number" \
-  --env "HOME=/tmp/lucia-home-$uid_number" \
-  --env XDG_RUNTIME_DIR=/run/lucia \
-  --env WAYLAND_DISPLAY=wayland-lucia \
+  --env "OLI_DESKTOP_UID=$uid_number" \
+  --env "OLI_DESKTOP_GID=$gid_number" \
+  --env "HOME=/tmp/oli-desktop-home-$uid_number" \
+  --env XDG_RUNTIME_DIR=/run/oli-desktop \
+  --env WAYLAND_DISPLAY=wayland-oli-desktop \
   "$image" "$weston_id" bash -ec '
     cp -a /mnt/lists/. /var/lib/apt/lists/
     cp /mnt/debs/*.deb /var/cache/apt/archives/
-    DEBIAN_FRONTEND=noninteractive apt-get --no-download install -y --no-install-recommends weston passwd util-linux > /var/log/lucia/install.log 2>&1 || { tail -40 /var/log/lucia/install.log; exit 1; }
-    getent group "$LUCIA_GID" >/dev/null || groupadd --gid "$LUCIA_GID" lucia
-    getent passwd "$LUCIA_UID" >/dev/null || useradd --uid "$LUCIA_UID" --gid "$LUCIA_GID" --home-dir "$HOME" --no-create-home --shell /usr/sbin/nologin lucia
-    install -d -o "$LUCIA_UID" -g "$LUCIA_GID" "$HOME"
-    dpkg-query --show weston > /var/log/lucia/packages.txt
-    exec setpriv --reuid="$LUCIA_UID" --regid="$LUCIA_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- weston --backend=headless-backend.so --width=1024 --height=768 --socket=wayland-lucia --idle-time=0 --config=/run/lucia/weston.ini --log=/var/log/lucia/weston.log
+    DEBIAN_FRONTEND=noninteractive apt-get --no-download install -y --no-install-recommends weston passwd util-linux > /var/log/oli-desktop/install.log 2>&1 || { tail -40 /var/log/oli-desktop/install.log; exit 1; }
+    getent group "$OLI_DESKTOP_GID" >/dev/null || groupadd --gid "$OLI_DESKTOP_GID" oli-desktop
+    getent passwd "$OLI_DESKTOP_UID" >/dev/null || useradd --uid "$OLI_DESKTOP_UID" --gid "$OLI_DESKTOP_GID" --home-dir "$HOME" --no-create-home --shell /usr/sbin/nologin oli-desktop
+    install -d -o "$OLI_DESKTOP_UID" -g "$OLI_DESKTOP_GID" "$HOME"
+    dpkg-query --show weston > /var/log/oli-desktop/packages.txt
+    exec setpriv --reuid="$OLI_DESKTOP_UID" --regid="$OLI_DESKTOP_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- weston --backend=headless-backend.so --width=1024 --height=768 --socket=wayland-oli-desktop --idle-time=0 --config=/run/oli-desktop/weston.ini --log=/var/log/oli-desktop/weston.log
   '
 
 client_output=
@@ -148,28 +148,37 @@ if ! client_output=$(sudo -n ctr -n "$namespace" run --rm \
   --mount "$client_log_mount" \
   --mount "$client_package_mount" \
   --mount "$source_mount" \
-  --env "LUCIA_UID=$uid_number" \
-  --env "LUCIA_GID=$gid_number" \
-  --env "HOME=/tmp/lucia-home-$uid_number" \
-  --env XDG_RUNTIME_DIR=/run/lucia \
-  --env WAYLAND_DISPLAY=wayland-lucia \
+  --env "OLI_DESKTOP_UID=$uid_number" \
+  --env "OLI_DESKTOP_GID=$gid_number" \
+  --env "HOME=/tmp/oli-desktop-home-$uid_number" \
+  --env XDG_RUNTIME_DIR=/run/oli-desktop \
+  --env WAYLAND_DISPLAY=wayland-oli-desktop \
   "$image" "$client_id" bash -ec '
     cp -a /mnt/lists/. /var/lib/apt/lists/
     cp /mnt/debs/*.deb /var/cache/apt/archives/
-    DEBIAN_FRONTEND=noninteractive apt-get --no-download install -y --no-install-recommends build-essential libcairo2-dev libwayland-dev libxkbcommon-dev wayland-protocols pkg-config passwd util-linux fonts-dejavu-core > /var/log/lucia/install.log 2>&1 || { tail -40 /var/log/lucia/install.log; exit 1; }
-    getent group "$LUCIA_GID" >/dev/null || groupadd --gid "$LUCIA_GID" lucia
-    getent passwd "$LUCIA_UID" >/dev/null || useradd --uid "$LUCIA_UID" --gid "$LUCIA_GID" --home-dir "$HOME" --no-create-home --shell /usr/sbin/nologin lucia
-    install -d -o "$LUCIA_UID" -g "$LUCIA_GID" "$HOME"
-    install -d /tmp/lucia-build
-    wayland-scanner client-header /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml /tmp/lucia-build/xdg-shell-client-protocol.h
-    wayland-scanner private-code /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml /tmp/lucia-build/xdg-shell-protocol.c
-    cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -I/tmp/lucia-build /opt/lucia/client.c /tmp/lucia-build/xdg-shell-protocol.c -o /tmp/lucia-build/lucia-gui-prototype $(pkg-config --cflags --libs wayland-client cairo)
-    cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -I/tmp/lucia-build /opt/lucia/background.c /tmp/lucia-build/xdg-shell-protocol.c -o /tmp/lucia-build/lucia-background-prototype $(pkg-config --cflags --libs wayland-client cairo xkbcommon)
-    chown -R "$LUCIA_UID:$LUCIA_GID" /tmp/lucia-build
-    dpkg-query --show build-essential libcairo2-dev libwayland-dev libxkbcommon-dev wayland-protocols fonts-dejavu-core > /var/log/lucia/packages.txt
-    python3 -c "import os, time; p = \"/run/lucia/wayland-lucia\"; end = time.monotonic() + 20; exec(\"while time.monotonic() < end:\\n if os.path.exists(p): break\\n time.sleep(0.05)\"); raise SystemExit(0 if os.path.exists(p) else \"Wayland socket did not appear\")"
-    setpriv --reuid="$LUCIA_UID" --regid="$LUCIA_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- /tmp/lucia-build/lucia-gui-prototype --smoke
-    exec setpriv --reuid="$LUCIA_UID" --regid="$LUCIA_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- /tmp/lucia-build/lucia-background-prototype --smoke
+    DEBIAN_FRONTEND=noninteractive apt-get --no-download install -y --no-install-recommends build-essential libcairo2-dev libwayland-dev libxkbcommon-dev wayland-protocols pkg-config passwd util-linux fonts-dejavu-core > /var/log/oli-desktop/install.log 2>&1 || { tail -40 /var/log/oli-desktop/install.log; exit 1; }
+    getent group "$OLI_DESKTOP_GID" >/dev/null || groupadd --gid "$OLI_DESKTOP_GID" oli-desktop
+    getent passwd "$OLI_DESKTOP_UID" >/dev/null || useradd --uid "$OLI_DESKTOP_UID" --gid "$OLI_DESKTOP_GID" --home-dir "$HOME" --no-create-home --shell /usr/sbin/nologin oli-desktop
+    install -d -o "$OLI_DESKTOP_UID" -g "$OLI_DESKTOP_GID" "$HOME"
+    install -d /tmp/oli-desktop-build
+    wayland-scanner client-header /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml /tmp/oli-desktop-build/xdg-shell-client-protocol.h
+    wayland-scanner private-code /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml /tmp/oli-desktop-build/xdg-shell-protocol.c
+    cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -I/tmp/oli-desktop-build /opt/oli-desktop/client.c /tmp/oli-desktop-build/xdg-shell-protocol.c -o /tmp/oli-desktop-build/oli-desktop-gui-prototype $(pkg-config --cflags --libs wayland-client cairo)
+    cc -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L -I/tmp/oli-desktop-build /opt/oli-desktop/background.c /tmp/oli-desktop-build/xdg-shell-protocol.c -o /tmp/oli-desktop-build/oli-desktop-background-prototype $(pkg-config --cflags --libs wayland-client cairo xkbcommon)
+    chown -R "$OLI_DESKTOP_UID:$OLI_DESKTOP_GID" /tmp/oli-desktop-build
+    dpkg-query --show build-essential libcairo2-dev libwayland-dev libxkbcommon-dev wayland-protocols fonts-dejavu-core > /var/log/oli-desktop/packages.txt
+    python3 -c "import os, time; p = \"/run/oli-desktop/wayland-oli-desktop\"; end = time.monotonic() + 20; exec(\"while time.monotonic() < end:\\n if os.path.exists(p): break\\n time.sleep(0.05)\"); raise SystemExit(0 if os.path.exists(p) else \"Wayland socket did not appear\")"
+    setpriv --reuid="$OLI_DESKTOP_UID" --regid="$OLI_DESKTOP_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- /tmp/oli-desktop-build/oli-desktop-gui-prototype --smoke
+    if setpriv --reuid="$OLI_DESKTOP_UID" --regid="$OLI_DESKTOP_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- /tmp/oli-desktop-build/oli-desktop-background-prototype --smoke; then
+      background_status=0
+    else
+      background_status=$?
+    fi
+    if [[ "$background_status" -ne 42 ]]; then
+      printf "Expected logout status 42, received %s\n" "$background_status" >&2
+      exit 1
+    fi
+    printf "OLI_DESKTOP_LOGOUT_EXIT_STATUS: status=%s\n" "$background_status"
   ' 2>&1); then
   printf '%s\n' "$client_output" >&2
   [[ -f "$weston_logs/weston.log" ]] && tail -40 "$weston_logs/weston.log" >&2
@@ -191,14 +200,24 @@ for marker in \
   POINTER_ACTIVATION_OK \
   'STATUS_UPDATED: Activated by keyboard' \
   'STATUS_UPDATED: Activated by pointer' \
-  'LUCIA_BACKGROUND_FULLSCREEN_CONFIGURED: 768x1024' \
-  'LUCIA_OUTPUT_TRANSFORM: transform=rotate-270' \
-  LUCIA_BACKGROUND_FRAME_PRESENTED \
-  LUCIA_DEMO_PINS: \
-  'LUCIA_SHELL_ELEMENTS: identity=LUCIA menu=center apps=demo-pinned conversation=open status=none' \
-  'LUCIA_ASSISTANT_PANEL: state=open' \
-  LUCIA_ASSISTANT_PROMPT: \
-  LUCIA_MENU_LAYOUT: \
+  'OLI_DESKTOP_BACKGROUND_FULLSCREEN_CONFIGURED: 768x1024' \
+  'OLI_DESKTOP_OUTPUT_TRANSFORM: transform=rotate-270' \
+  OLI_DESKTOP_BACKGROUND_FRAME_PRESENTED \
+  OLI_DESKTOP_DEMO_PINS: \
+  OLI_DESKTOP_HOME_LAYOUT: \
+  'OLI_DESKTOP_HOME_ACTION: label=Open-Oli target=assistant' \
+  'OLI_DESKTOP_HOME_ACTION_ACTIVATED: input=pointer state=assistant-open' \
+  OLI_DESKTOP_LOGOUT_CONTROL: \
+  OLI_DESKTOP_LOGOUT_DIALOG: \
+  'OLI_DESKTOP_LOGOUT_CONTROL_ACTIVATED: input=pointer state=confirmation-open' \
+  'OLI_DESKTOP_LOGOUT_CANCELLED: input=pointer state=session-active' \
+  'LOGOUT_CONFIRMED: source=keyboard exit_status=42' \
+  'OLI_DESKTOP_LOGOUT_KEYBOARD_CONFIRMED: exit_status=42' \
+  'OLI_DESKTOP_LOGOUT_EXIT_STATUS: status=42' \
+  'OLI_DESKTOP_SHELL_ELEMENTS: identity=Oli menu=center apps=demo-pinned conversation=open status=none' \
+  'OLI_DESKTOP_ASSISTANT_PANEL: state=open' \
+  OLI_DESKTOP_ASSISTANT_PROMPT: \
+  OLI_DESKTOP_MENU_LAYOUT: \
   'LIFECYCLE: startup' \
   'LIFECYCLE: running' \
   'LIFECYCLE: shutdown'; do
@@ -207,15 +226,65 @@ for marker in \
     exit 1
   fi
 done
-if ! grep -Eq '^LUCIA_TASKBAR_LAYOUT: edge=bottom x=0 y=[0-9]+ width=768 height=[0-9]+$' <<<"$client_output"; then
+if [[ ! "$client_output" =~ OLI_DESKTOP_TASKBAR_LAYOUT:\ edge=bottom\ x=0\ y=([0-9]+)\ width=768\ height=([0-9]+) ]]; then
   printf '%s\n' 'Missing responsive bottom taskbar layout marker for the configured output.' >&2
   exit 1
 fi
-if ! grep -Eq '^LUCIA_ASSISTANT_PANEL: state=open x=[0-9]+ y=[0-9]+ width=[0-9]+ height=[0-9]+$' <<<"$client_output"; then
+taskbar_y=${BASH_REMATCH[1]}
+if [[ ! "$client_output" =~ OLI_DESKTOP_HOME_LAYOUT:\ width=([0-9]+)\ height=([0-9]+)\ heading_x=([0-9]+)\ heading_y=([0-9]+)\ action_x=([0-9]+)\ action_y=([0-9]+)\ action_width=([0-9]+)\ action_height=([0-9]+) ]]; then
+  printf '%s\n' 'Missing responsive workspace home layout marker.' >&2
+  exit 1
+fi
+home_width=${BASH_REMATCH[1]}
+home_height=${BASH_REMATCH[2]}
+home_heading_x=${BASH_REMATCH[3]}
+home_heading_y=${BASH_REMATCH[4]}
+home_action_x=${BASH_REMATCH[5]}
+home_action_y=${BASH_REMATCH[6]}
+home_action_width=${BASH_REMATCH[7]}
+home_action_height=${BASH_REMATCH[8]}
+if ((home_width != 768 || home_height != 1024 || home_heading_x < 0 || home_heading_y <= 0 || home_action_x < 0 || home_action_y <= 0 || home_action_width <= 0 || home_action_height <= 0 || home_action_x + home_action_width > home_width || home_action_y + home_action_height > taskbar_y)); then
+  printf 'Workspace home action bounds are invalid for %sx%s: heading=%s,%s action=%s,%s %sx%s taskbar_y=%s\n' \
+    "$home_width" "$home_height" "$home_heading_x" "$home_heading_y" \
+    "$home_action_x" "$home_action_y" "$home_action_width" "$home_action_height" \
+    "$taskbar_y" >&2
+  exit 1
+fi
+if [[ ! "$client_output" =~ OLI_DESKTOP_LOGOUT_CONTROL:\ x=([0-9]+)\ y=([0-9]+)\ width=([0-9]+)\ height=([0-9]+)\ label=Log-out ]]; then
+  printf '%s\n' 'Missing visible logout control layout.' >&2
+  exit 1
+fi
+logout_x=${BASH_REMATCH[1]}
+logout_y=${BASH_REMATCH[2]}
+logout_width=${BASH_REMATCH[3]}
+logout_height=${BASH_REMATCH[4]}
+if ((logout_x < 0 || logout_y < taskbar_y || logout_width <= 0 || logout_height <= 0 || logout_x + logout_width > 768 || logout_y + logout_height > 1024)); then
+  printf 'Logout control is outside the taskbar: x=%s y=%s size=%sx%s taskbar_y=%s\n' \
+    "$logout_x" "$logout_y" "$logout_width" "$logout_height" "$taskbar_y" >&2
+  exit 1
+fi
+if [[ ! "$client_output" =~ OLI_DESKTOP_LOGOUT_DIALOG:\ state=open\ x=([0-9]+)\ y=([0-9]+)\ width=([0-9]+)\ height=([0-9]+)\ cancel_x=([0-9]+)\ confirm_x=([0-9]+)\ button_y=([0-9]+)\ button_width=([0-9]+)\ button_height=([0-9]+) ]]; then
+  printf '%s\n' 'Missing logout confirmation dialog layout.' >&2
+  exit 1
+fi
+dialog_x=${BASH_REMATCH[1]}
+dialog_y=${BASH_REMATCH[2]}
+dialog_width=${BASH_REMATCH[3]}
+dialog_height=${BASH_REMATCH[4]}
+cancel_x=${BASH_REMATCH[5]}
+confirm_x=${BASH_REMATCH[6]}
+dialog_button_y=${BASH_REMATCH[7]}
+dialog_button_width=${BASH_REMATCH[8]}
+dialog_button_height=${BASH_REMATCH[9]}
+if ((dialog_x < 0 || dialog_y < 0 || dialog_width <= 0 || dialog_height <= 0 || dialog_x + dialog_width > 768 || dialog_y + dialog_height > taskbar_y || cancel_x < dialog_x || cancel_x + dialog_button_width > confirm_x || confirm_x + dialog_button_width > dialog_x + dialog_width || dialog_button_y < dialog_y || dialog_button_y + dialog_button_height > dialog_y + dialog_height)); then
+  printf '%s\n' 'Logout confirmation dialog controls exceed their bounds.' >&2
+  exit 1
+fi
+if ! grep -Eq '^OLI_DESKTOP_ASSISTANT_PANEL: state=open x=[0-9]+ y=[0-9]+ width=[0-9]+ height=[0-9]+$' <<<"$client_output"; then
   printf '%s\n' 'Missing opened assistant panel layout marker for the configured output.' >&2
   exit 1
 fi
-if ! grep -Eq '^LUCIA_ASSISTANT_PROMPT: x=[0-9]+ y=[0-9]+ width=[0-9]+ height=[0-9]+$' <<<"$client_output"; then
+if ! grep -Eq '^OLI_DESKTOP_ASSISTANT_PROMPT: x=[0-9]+ y=[0-9]+ width=[0-9]+ height=[0-9]+$' <<<"$client_output"; then
   printf '%s\n' 'Missing assistant prompt layout marker.' >&2
   exit 1
 fi

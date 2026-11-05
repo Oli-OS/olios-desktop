@@ -1,0 +1,6 @@
+[terminal]
+vt = 2
+
+[default_session]
+command = "env LIBSEAT_BACKEND=seatd cage -s -- gtkgreet --style /etc/oli-desktop/greeter.css --command /usr/local/libexec/oli-desktop-session"
+user = "_greetd"

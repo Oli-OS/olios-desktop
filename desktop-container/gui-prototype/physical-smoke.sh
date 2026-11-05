@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly image_repository='localhost/lucia/gui-prototype'
+readonly image_repository='localhost/olios/oli-desktop'
 readonly seatd_socket='/run/seatd.sock'
-readonly wayland_display='wayland-lucia'
+readonly wayland_display='wayland-oli-desktop'
 readonly compositor_timeout=180
 readonly client_timeout=60
 readonly -a linux_capabilities=(
@@ -145,7 +145,7 @@ if [[ "$stay_mode" -eq 1 ]]; then
 else
   printf '%s\n' 'DEVELOPMENT ONLY: this test takes over physical tty2 for up to 180 seconds.'
 fi
-printf '%s\n' 'It starts a DRM compositor and displays the LUCIA-owned background, demo app pins, and local Qwen3 assistant. Prompts reach host-loopback Ollama only through a private Unix socket; the UI task has no host networking. No apps are launched. Save other console work first.'
+printf '%s\n' 'It starts a DRM compositor and displays the Oli-owned background, demo app pins, and local Qwen3 assistant. Prompts reach host-loopback Ollama only through a private Unix socket; the UI task has no host networking. No apps are launched. Save other console work first.'
 if [[ ! -t 0 ]]; then
   printf '%s\n' 'An interactive terminal is required for the confirmation and client.' >&2
   exit 1
@@ -164,18 +164,17 @@ saved_seatd_active=$seatd_active_state
 saved_seatd_enabled=$seatd_enabled_state
 
 run_token="${uid_number}-$(date +%s)-$$-${RANDOM}"
-namespace="lucia-physical-${run_token}"
+namespace="oli-desktop-physical-${run_token}"
 weston_id="weston-${run_token}"
 client_id="client-${run_token}"
 image="${image_repository}:${run_token}"
-work_dir=$(mktemp -d "${TMPDIR:-/tmp}/lucia-physical-smoke.XXXXXXXX")
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/oli-desktop-physical-smoke.XXXXXXXX")
 runtime_dir="$work_dir/runtime"
 weston_logs="$work_dir/weston-logs"
 client_log="$work_dir/client.log"
 provider_dir="$work_dir/provider"
 provider_socket="$provider_dir/model.sock"
 provider_log="$work_dir/provider.log"
-weston_config="$work_dir/weston.ini"
 namespace_created=0
 seatd_started=0
 vt_switched=0
@@ -299,7 +298,7 @@ cleanup() {
     cleanup_failed=1
   fi
 
-  if [[ -d "$work_dir" && "$work_dir" == "${TMPDIR:-/tmp}"/lucia-physical-smoke.* ]]; then
+  if [[ -d "$work_dir" && "$work_dir" == "${TMPDIR:-/tmp}"/oli-desktop-physical-smoke.* ]]; then
     sudo -n rm -rf -- "$work_dir" || cleanup_failed=1
   fi
   if [[ "$cleanup_failed" -eq 1 ]]; then
@@ -316,14 +315,12 @@ chmod 700 "$work_dir"
 sudo -n install -d -o "$uid_number" -g "$gid_number" -m 0700 "$runtime_dir"
 mkdir -m 0700 "$provider_dir"
 sudo -n install -d -o "$uid_number" -g "$gid_number" -m 0750 "$weston_logs"
-printf '[output]\nname=DP-1\ntransform=rotate-270\n' >"$weston_config"
-chmod 0444 "$weston_config"
 
 prototype_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 product_dir=$(cd -- "$prototype_dir/../../product" && pwd)
-broker_binary="$product_dir/target/release/lucia-local-model"
+broker_binary="$product_dir/target/release/oli-local-model"
 if ! cargo build --manifest-path "$product_dir/Cargo.toml" --release \
-  -p lucia-local-model --bin lucia-local-model; then
+  -p oli-local-model --bin oli-local-model; then
   printf '%s\n' 'Could not build the local model broker; physical display state is unchanged.' >&2
   exit 1
 fi
@@ -331,7 +328,7 @@ if ! docker buildx build \
   --platform linux/amd64 \
   --file "$prototype_dir/Containerfile" \
   --tag "$image" \
-  --output "type=oci,dest=$work_dir/lucia-image.oci.tar,name=$image" \
+  --output "type=oci,dest=$work_dir/oli-desktop-image.oci.tar,name=$image" \
   "$prototype_dir" >"$work_dir/image-build.log" 2>&1; then
   cat "$work_dir/image-build.log" >&2 || true
   exit 1
@@ -341,7 +338,7 @@ sudo -n ctr namespaces create "$namespace"
 namespace_created=1
 if ! containerd images import --local --platform linux/amd64 \
   --base-name "$image_repository" --index-name "$image" \
-  "$work_dir/lucia-image.oci.tar" >"$work_dir/image-import.log" 2>&1; then
+  "$work_dir/oli-desktop-image.oci.tar" >"$work_dir/image-import.log" 2>&1; then
   cat "$work_dir/image-import.log" >&2 || true
   exit 1
 fi
@@ -355,7 +352,7 @@ if [[ "$provider_dir_state" != "$uid_number:$gid_number:700" ]]; then
   printf 'Unexpected model socket directory ownership/mode: %s\n' "$provider_dir_state" >&2
   exit 1
 fi
-LUCIA_MODEL_SOCKET="$provider_socket" "$broker_binary" serve \
+OLI_MODEL_SOCKET="$provider_socket" "$broker_binary" serve \
   --socket "$provider_socket" --model qwen3:0.6b >"$provider_log" 2>&1 &
 provider_pid=$!
 provider_started=1
@@ -391,9 +388,8 @@ if [[ ! -S "$seatd_socket" ]]; then
 fi
 seatd_socket_gid=$(sudo -n stat -c '%g' "$seatd_socket")
 
-runtime_mount="type=bind,src=$runtime_dir,dst=/run/lucia,options=rbind:rw"
-provider_mount="type=bind,src=$provider_dir,dst=/run/lucia-model,options=rbind:ro"
-weston_config_mount="type=bind,src=$weston_config,dst=/run/lucia/weston.ini,options=rbind:ro"
+runtime_mount="type=bind,src=$runtime_dir,dst=/run/oli-desktop,options=rbind:rw"
+provider_mount="type=bind,src=$provider_dir,dst=/run/oli-model,options=rbind:ro"
 seatd_mount="type=bind,src=$seatd_socket,dst=$seatd_socket,options=rbind:rw"
 udev_mount='type=bind,src=/run/udev,dst=/run/udev,options=rbind:ro'
 sys_mount='type=bind,src=/sys,dst=/sys,options=rbind:ro'
@@ -403,27 +399,26 @@ sudo -n chvt 2
 sudo -n ctr -n "$namespace" run --detach \
   --device /dev/tty2 \
   --mount "$runtime_mount" \
-  --mount "$weston_config_mount" \
   --mount "$seatd_mount" \
   --mount "$udev_mount" \
   --mount "$sys_mount" \
-  --mount "type=bind,src=$weston_logs,dst=/var/log/lucia,options=rbind:rw" \
-  --env "LUCIA_UID=$uid_number" \
-  --env "LUCIA_GID=$gid_number" \
+  --mount "type=bind,src=$weston_logs,dst=/var/log/oli-desktop,options=rbind:rw" \
+  --env "OLI_DESKTOP_UID=$uid_number" \
+  --env "OLI_DESKTOP_GID=$gid_number" \
   --env "SEATD_SOCKET_GID=$seatd_socket_gid" \
   --env LIBSEAT_BACKEND=seatd \
-  --env HOME=/tmp/lucia-home \
-  --env XDG_RUNTIME_DIR=/run/lucia \
+  --env HOME=/tmp/oli-desktop-home \
+  --env XDG_RUNTIME_DIR=/run/oli-desktop \
   --env "WAYLAND_DISPLAY=$wayland_display" \
-  --env "LUCIA_STAY=$stay_mode" \
+  --env "OLI_DESKTOP_STAY=$stay_mode" \
   "$image" "$weston_id" bash -ec '
-    exec > /var/log/lucia/weston-startup.log 2>&1
+    exec > /var/log/oli-desktop/weston-startup.log 2>&1
     weston_help=$(weston --help 2>&1) || { printf "%s\n" "$weston_help"; exit 1; }
     [[ "$weston_help" == *--shell* ]] || { printf "%s\n" "Weston does not advertise --shell"; exit 1; }
     kiosk_shell=$(find /usr/lib -type f -name kiosk-shell.so -print -quit)
     [[ -n "$kiosk_shell" ]] || { printf "%s\n" "Weston kiosk-shell.so is unavailable"; exit 1; }
     printf "WESTON_KIOSK_SHELL_AVAILABLE: %s\n" "$kiosk_shell"
-    exec setpriv --reuid="$LUCIA_UID" --regid="$SEATD_SOCKET_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs -- bash -ec "
+    exec setpriv --reuid="$OLI_DESKTOP_UID" --regid="$SEATD_SOCKET_GID" --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs -- bash -ec "
       while read -r cap_field cap_value extra_field; do
         case \$cap_field in
           CapInh:|CapPrm:|CapEff:|CapBnd:|CapAmb:)
@@ -431,10 +426,10 @@ sudo -n ctr -n "$namespace" run --detach \
             ;;
         esac
       done < /proc/self/status
-        if [[ "\$LUCIA_STAY" == 1 ]]; then
-          exec weston --backend=drm-backend.so --shell=kiosk-shell.so --socket="\$WAYLAND_DISPLAY" --idle-time=0 --config=/run/lucia/weston.ini --log=/var/log/lucia/weston.log
+        if [[ "\$OLI_DESKTOP_STAY" == 1 ]]; then
+          exec weston --backend=drm-backend.so --shell=kiosk-shell.so --socket="\$WAYLAND_DISPLAY" --idle-time=0 --config=/etc/oli-desktop/weston-default.ini --log=/var/log/oli-desktop/weston.log
         else
-          exec timeout --signal=TERM --kill-after=5s 180s weston --backend=drm-backend.so --shell=kiosk-shell.so --socket="\$WAYLAND_DISPLAY" --idle-time=0 --config=/run/lucia/weston.ini --log=/var/log/lucia/weston.log
+          exec timeout --signal=TERM --kill-after=5s 180s weston --backend=drm-backend.so --shell=kiosk-shell.so --socket="\$WAYLAND_DISPLAY" --idle-time=0 --config=/etc/oli-desktop/weston-default.ini --log=/var/log/oli-desktop/weston.log
         fi
     "
   '
@@ -455,7 +450,7 @@ if [[ "$socket_ready" -ne 1 ]]; then
   exit 1
 fi
 
-printf '%s\n' 'Weston kiosk shell is on tty2; LUCIA will present its fullscreen background, demo pins, and clickable local Qwen3 assistant.'
+printf '%s\n' 'Weston kiosk shell is on tty2; Oli will present its fullscreen background, demo pins, and clickable local Qwen3 assistant.'
 printf 'WAYLAND_SOCKET_READY: %s\n' "$runtime_dir/$wayland_display"
 grep -F 'WESTON_KIOSK_SHELL_AVAILABLE:' "$weston_logs/weston-startup.log"
 if [[ "$stay_mode" -eq 1 ]]; then
@@ -470,13 +465,13 @@ client_command=(sudo -n ctr -n "$namespace" run --rm \
   "${capability_drop_args[@]}" \
   --mount "$runtime_mount" \
   --mount "$provider_mount" \
-  --env "LUCIA_UID=$uid_number" \
+  --env "OLI_DESKTOP_UID=$uid_number" \
   --env HOME=/tmp \
-  --env XDG_RUNTIME_DIR=/run/lucia \
+  --env XDG_RUNTIME_DIR=/run/oli-desktop \
   --env "WAYLAND_DISPLAY=$wayland_display" \
-  --env LUCIA_MODEL_SOCKET=/run/lucia-model/model.sock \
+  --env OLI_MODEL_SOCKET=/run/oli-model/model.sock \
   "$image" "$client_id" bash -ec '
-    [[ "$(id -u)" == "$LUCIA_UID" ]] || { printf "%s\n" "Client is not running as the invoking UID" >&2; exit 1; }
+    [[ "$(id -u)" == "$OLI_DESKTOP_UID" ]] || { printf "%s\n" "Client is not running as the invoking UID" >&2; exit 1; }
     while read -r cap_field cap_value extra_field; do
       case "$cap_field" in
         CapInh:|CapPrm:|CapEff:|CapBnd:|CapAmb:)
@@ -484,7 +479,7 @@ client_command=(sudo -n ctr -n "$namespace" run --rm \
           ;;
       esac
     done < /proc/self/status
-    exec /usr/local/bin/lucia-background-prototype
+    exec /usr/local/bin/oli-desktop-background-prototype
   ')
 if [[ "$stay_mode" -eq 1 ]]; then
   "${client_command[@]}" 2>&1 | tee "$client_log"
@@ -511,24 +506,25 @@ printf 'CLIENT_TASK_EXIT_STATUS: %s\n' "$client_status"
 if [[ "$stay_mode" -ne 1 ]]; then
   cat "$client_log"
 fi
-grep -Fq 'LUCIA_BACKGROUND_FULLSCREEN_CONFIGURED:' "$client_log" || { printf '%s\n' 'Fullscreen configure marker missing.' >&2; exit 1; }
-grep -Fq 'LUCIA_BACKGROUND_FRAME_PRESENTED' "$client_log" || { printf '%s\n' 'Presented background frame marker missing.' >&2; exit 1; }
-grep -Fq 'LUCIA_OUTPUT_TRANSFORM: transform=rotate-270' "$client_log" || { printf '%s\n' 'Clockwise Weston output transform marker missing.' >&2; exit 1; }
-grep -Fq 'LUCIA_POINTER_CURSOR_SET: width=32 height=44 hotspot=2,2' "$client_log" || { printf '%s\n' 'LUCIA pointer cursor marker missing.' >&2; exit 1; }
-grep -Fq 'LUCIA_DEMO_PINS: count=3 launch=disabled' "$client_log" || { printf '%s\n' 'LUCIA demo-pin marker missing.' >&2; exit 1; }
-grep -Fq 'LUCIA_SHELL_ELEMENTS: identity=LUCIA menu=center apps=demo-pinned conversation=closed status=none' "$client_log" || { printf '%s\n' 'LUCIA shell element marker missing.' >&2; exit 1; }
-if [[ ! "$client_log" =~ LUCIA_BACKGROUND_FULLSCREEN_CONFIGURED:\ ([0-9]+)x([0-9]+) ]]; then
+grep -Fq 'OLI_DESKTOP_BACKGROUND_FULLSCREEN_CONFIGURED:' "$client_log" || { printf '%s\n' 'Fullscreen configure marker missing.' >&2; exit 1; }
+grep -Fq 'OLI_DESKTOP_BACKGROUND_FRAME_PRESENTED' "$client_log" || { printf '%s\n' 'Presented background frame marker missing.' >&2; exit 1; }
+grep -Fq 'OLI_DESKTOP_OUTPUT_TRANSFORM: transform=' "$client_log" || { printf '%s\n' 'Weston output transform marker missing.' >&2; exit 1; }
+grep -Fq 'OLI_DESKTOP_POINTER_CURSOR_SET: width=32 height=44 hotspot=2,2' "$client_log" || { printf '%s\n' 'Oli pointer cursor marker missing.' >&2; exit 1; }
+grep -Fq 'OLI_DESKTOP_DEMO_PINS: count=3 launch=disabled' "$client_log" || { printf '%s\n' 'Oli demo-pin marker missing.' >&2; exit 1; }
+grep -Fq 'OLI_DESKTOP_SHELL_ELEMENTS: identity=Oli menu=center apps=demo-pinned conversation=closed status=none' "$client_log" || { printf '%s\n' 'Oli shell element marker missing.' >&2; exit 1; }
+if [[ ! "$client_log" =~ OLI_DESKTOP_BACKGROUND_FULLSCREEN_CONFIGURED:\ ([0-9]+)x([0-9]+) ]]; then
   printf '%s\n' 'Configured output dimensions are missing or invalid.' >&2
   exit 1
 fi
 configured_width=${BASH_REMATCH[1]}
 configured_height=${BASH_REMATCH[2]}
-if ((configured_height <= configured_width)); then
-  printf 'Clockwise rotated output is not portrait: output=%sx%s\n' \
+if ((configured_width <= 0 || configured_height <= 0)); then
+  printf 'Detected output dimensions are invalid: output=%sx%s\n' \
     "$configured_width" "$configured_height" >&2
   exit 1
 fi
-if [[ ! "$client_log" =~ LUCIA_TASKBAR_LAYOUT:\ edge=bottom\ x=([0-9]+)\ y=([0-9]+)\ width=([0-9]+)\ height=([0-9]+) ]]; then
+printf 'Detected output dimensions: %sx%s\n' "$configured_width" "$configured_height"
+if [[ ! "$client_log" =~ OLI_DESKTOP_TASKBAR_LAYOUT:\ edge=bottom\ x=([0-9]+)\ y=([0-9]+)\ width=([0-9]+)\ height=([0-9]+) ]]; then
   printf '%s\n' 'Responsive bottom taskbar layout marker is missing or invalid.' >&2
   exit 1
 fi
@@ -542,4 +538,4 @@ if ((taskbar_x != 0 || taskbar_y + taskbar_height != configured_height || taskba
   exit 1
 fi
 grep -Fq 'WESTON_KIOSK_SHELL_AVAILABLE:' "$weston_logs/weston-startup.log" || { printf '%s\n' 'Weston kiosk-shell runtime probe marker missing.' >&2; exit 1; }
-printf '\nPhysical LUCIA background-and-taskbar prototype finished; restoring the saved VT and seatd state.\n'
+printf '\nPhysical Oli background-and-taskbar prototype finished; restoring the saved VT and seatd state.\n'

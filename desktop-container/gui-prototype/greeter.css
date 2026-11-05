@@ -1,0 +1,39 @@
+window {
+    background-color: #10191f;
+    color: #e8eef0;
+    font-family: "DejaVu Sans", sans-serif;
+}
+
+window box {
+    background-color: #1b2a31;
+    border-radius: 12px;
+    padding: 28px;
+}
+
+window label {
+    color: #e8eef0;
+    font-size: 15px;
+}
+
+window entry {
+    background-color: #111b20;
+    color: #f3f6f7;
+    border: 1px solid #52666d;
+    border-radius: 6px;
+    min-height: 38px;
+    padding: 0 12px;
+}
+
+window button {
+    background-color: #c6e86b;
+    color: #172019;
+    border: none;
+    border-radius: 6px;
+    min-height: 40px;
+    padding: 0 20px;
+    font-weight: bold;
+}
+
+window button:hover {
+    background-color: #d7f58a;
+}
