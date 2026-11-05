@@ -1,32 +1,41 @@
 window {
-    background-color: #10191f;
-    color: #e8eef0;
+    background-color: #10191c;
+    color: #edf4f1;
     font-family: "DejaVu Sans", sans-serif;
 }
 
-window box {
-    background-color: #1b2a31;
-    border-radius: 12px;
-    padding: 28px;
+window #window {
+    background-color: #1b292a;
+    border: 1px solid #3e5651;
+    border-radius: 10px;
+    padding: 32px;
 }
 
 window label {
-    color: #e8eef0;
+    color: #dce8e3;
     font-size: 15px;
 }
 
-window entry {
-    background-color: #111b20;
-    color: #f3f6f7;
-    border: 1px solid #52666d;
-    border-radius: 6px;
-    min-height: 38px;
+window #input-field,
+window #command-selector,
+window #command-selector entry {
+    background-color: #111b1c;
+    color: #f1f7f4;
+    border: 1px solid #58736a;
+    border-radius: 7px;
+    min-height: 42px;
     padding: 0 12px;
 }
 
+window #input-field:focus,
+window #command-selector:focus,
+window #command-selector entry:focus {
+    border-color: #8bd8b2;
+}
+
 window button {
-    background-color: #c6e86b;
-    color: #172019;
+    background-color: #b9e5cd;
+    color: #14251d;
     border: none;
     border-radius: 6px;
     min-height: 40px;
@@ -34,6 +43,11 @@ window button {
     font-weight: bold;
 }
 
-window button:hover {
-    background-color: #d7f58a;
+window button:hover,
+window button:focus {
+    background-color: #d0f0df;
+}
+
+window button:active {
+    background-color: #9dcbb3;
 }
